@@ -1,0 +1,15 @@
+{
+  "appId": "com.talentshield.hrms",
+  "appName": "HRMS",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0f7a3a",
+      "showSpinner": false
+    }
+  }
+}
