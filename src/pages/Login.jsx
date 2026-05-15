@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../utils/api';
-import { setToken } from '../utils/auth';
+import { setToken, setUser } from '../utils/auth';
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -14,12 +14,19 @@ export default function Login({ onLogin }) {
     setLoading(true);
     try {
       const { data } = await api.post('/auth/login', { email, password });
-      const token = data?.token || data?.accessToken;
-      if (!token) throw new Error('No token returned from server');
+      // Backend shape: { success, message, data: { user, token, userType } }
+      const token = data?.data?.token;
+      const user = data?.data?.user;
+      if (!token) throw new Error(data?.message || 'No token returned from server');
       await setToken(token);
+      if (user) await setUser(user);
       onLogin();
     } catch (err) {
-      setError(err?.response?.data?.message || err.message || 'Login failed');
+      setError(
+        err?.response?.data?.message ||
+          err?.message ||
+          'Login failed — check the server URL and credentials.'
+      );
     } finally {
       setLoading(false);
     }

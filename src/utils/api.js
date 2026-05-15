@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getToken, clearToken } from './auth';
+import { getToken, clearSession } from './auth';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL;
 
@@ -24,7 +24,7 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     if (err?.response?.status === 401) {
-      await clearToken();
+      await clearSession();
     }
     return Promise.reject(err);
   }
