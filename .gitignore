@@ -2,6 +2,9 @@ node_modules
 dist
 build
 
+# Local reference copy of the web frontend — not part of the mobile app
+web_frontend/
+
 # Env
 .env
 .env.local
