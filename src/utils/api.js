@@ -10,6 +10,10 @@ if (!baseURL) {
 export const api = axios.create({
   baseURL,
   timeout: 15000,
+  // Match web frontend: send/accept cookies so cookie-session routes work.
+  // Required for endpoints that rely on req.session (e.g. /api/auth/logout
+  // and any session-only routes). Backend must allow credentials + origin.
+  withCredentials: true,
 });
 
 api.interceptors.request.use(async (config) => {
@@ -23,7 +27,16 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
-    if (err?.response?.status === 401) {
+    const status = err?.response?.status;
+    const url = err?.config?.url || '';
+    const isAuthRoute =
+      url.includes('/auth/login') ||
+      url.includes('/auth/signup') ||
+      url.includes('/auth/validate-session');
+
+    // Mirror web behavior: 401 on a non-auth route → drop the session.
+    // The app shell will route the user back to Login on next render.
+    if (status === 401 && !isAuthRoute) {
       await clearSession();
     }
     return Promise.reject(err);

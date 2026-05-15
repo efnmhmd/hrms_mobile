@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { api } from '../utils/api';
 import { setToken, setUser } from '../utils/auth';
+import { getErrorMessage } from '../utils/errorHandler';
 
 export default function Login({ onLogin }) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -13,20 +14,29 @@ export default function Login({ onLogin }) {
     setError('');
     setLoading(true);
     try {
-      const { data } = await api.post('/auth/login', { email, password });
+      // Match web payload exactly: identifier + rememberMe
+      const { data } = await api.post('/auth/login', {
+        identifier,
+        password,
+        rememberMe: true,
+      });
+
       // Backend shape: { success, message, data: { user, token, userType } }
-      const token = data?.data?.token;
-      const user = data?.data?.user;
-      if (!token) throw new Error(data?.message || 'No token returned from server');
+      // Web frontend also accepts a flat shape as fallback.
+      const payload = data?.data || data;
+      const token = payload?.token;
+      const userType = payload?.userType;
+      const userData = payload?.user;
+
+      if (!token || !userData) {
+        throw new Error('Invalid response from server');
+      }
+
       await setToken(token);
-      if (user) await setUser(user);
+      await setUser({ ...userData, userType: userType || userData.userType });
       onLogin();
     } catch (err) {
-      setError(
-        err?.response?.data?.message ||
-          err?.message ||
-          'Login failed — check the server URL and credentials.'
-      );
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -42,14 +52,14 @@ export default function Login({ onLogin }) {
           <h1 className="mb-1 text-2xl font-bold text-brand">HRMS</h1>
           <p className="mb-6 text-sm text-gray-500">Sign in to continue</p>
 
-          <label className="mb-1 block text-xs font-medium text-gray-600">Email</label>
+          <label className="mb-1 block text-xs font-medium text-gray-600">Email or username</label>
           <input
-            type="email"
+            type="text"
             inputMode="email"
             autoCapitalize="none"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             className="mb-4 w-full rounded-lg border border-gray-300 px-3 py-3 text-base focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             required
           />
