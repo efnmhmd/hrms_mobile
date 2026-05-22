@@ -681,6 +681,30 @@ export default function Calendar() {
     setTimeout(() => setBanner(null), 2800);
   }
 
+  useEffect(() => {
+    if (!modalOpen) return undefined;
+    const stage = document.querySelector('.tg-stage-inner');
+    if (!stage) return undefined;
+    const prevOverflow = stage.style.overflow;
+    const prevTouch = stage.style.touchAction;
+    const scrollTop = stage.scrollTop;
+    stage.style.overflow = 'hidden';
+    stage.style.touchAction = 'none';
+    // Block touchmove on the overlay itself too — defence in depth for iOS.
+    const blockTouch = (e) => {
+      // Allow scrolling inside the sheet
+      if (e.target.closest('.cal-sheet')) return;
+      e.preventDefault();
+    };
+    document.addEventListener('touchmove', blockTouch, { passive: false });
+    return () => {
+      stage.style.overflow = prevOverflow;
+      stage.style.touchAction = prevTouch;
+      stage.scrollTop = scrollTop;
+      document.removeEventListener('touchmove', blockTouch);
+    };
+  }, [modalOpen]);
+
   async function fetchMonth(monthDate) {
     setLoading(true);
     setError(null);
@@ -707,6 +731,93 @@ export default function Calendar() {
     fetchMonth(cursor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursor.getFullYear(), cursor.getMonth()]);
+
+  async function fetchRequestLists() {
+    setReqLoading(true);
+    try {
+      const [appRes, myRes] = await Promise.all([
+        api.get('/leave/approved-requests').catch(() => null),
+        api.get('/leave/my-requests').catch(() => null),
+      ]);
+      const appList = appRes?.data?.data || appRes?.data?.requests || (Array.isArray(appRes?.data) ? appRes.data : []);
+      const myList  = myRes?.data?.data  || myRes?.data?.requests  || (Array.isArray(myRes?.data) ? myRes.data : []);
+      setApproved(Array.isArray(appList) ? appList : []);
+      setMyReqs(Array.isArray(myList) ? myList : []);
+    } finally {
+      setReqLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchRequestLists();
+  }, []);
+
+  async function cancelLeave(req) {
+    if (!window.confirm('Cancel this leave request?')) return;
+    setActingId(req._id);
+    try {
+      await api.patch(`/leave/cancel/${req._id}`, { cancellationReason: 'Cancelled from mobile' });
+      setApproved((prev) => prev.filter((r) => r._id !== req._id));
+      setMyReqs((prev) => prev.map((r) => (r._id === req._id ? { ...r, status: 'cancelled' } : r)));
+      flash('success', 'Leave cancelled');
+      fetchMonth(cursor);
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  function openModal() {
+    setForm({
+      leaveType: 'Annual Leave',
+      startDate: toYMD(selected || today),
+      endDate: toYMD(selected || today),
+      startHalfDay: 'full',
+      endHalfDay: 'full',
+      reason: '',
+    });
+    setModalOpen(true);
+  }
+
+  async function submitTimeOff(e) {
+    e?.preventDefault?.();
+    if (!form.leaveType || !form.startDate || !form.endDate) {
+      flash('error', 'Type, start and end date are required');
+      return;
+    }
+    if (new Date(form.endDate) < new Date(form.startDate)) {
+      flash('error', 'End date can\'t be before start');
+      return;
+    }
+    if ((form.reason || '').trim().length < 10) {
+      flash('error', 'Please give a reason (10+ characters)');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const days = Math.max(1, Math.round(
+        (new Date(form.endDate) - new Date(form.startDate)) / (1000 * 60 * 60 * 24)
+      ) + 1) - (form.startHalfDay !== 'full' ? 0.5 : 0) - (form.endHalfDay !== 'full' ? 0.5 : 0);
+      await api.post('/leave/request', {
+        leaveType: form.leaveType,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        numberOfDays: Math.max(0.5, days),
+        reason: form.reason.trim(),
+        startHalfDay: form.startHalfDay,
+        endHalfDay: form.endHalfDay,
+      });
+      flash('success', 'Time off requested');
+      setModalOpen(false);
+      fetchRequestLists();
+      fetchMonth(cursor);
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   const cells = useMemo(() => buildGrid(cursor), [cursor]);
 
@@ -764,15 +875,58 @@ export default function Calendar() {
             <p className="cal-header-eyebrow">Leave & Shifts</p>
             <h1 className="cal-header-title">Calendar</h1>
           </div>
+          <button
+            type="button"
+            className="cal-add-btn"
+            onClick={openModal}
+            aria-label="Request time off"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
         </header>
 
-        {error && leaves.length === 0 && shifts.length === 0 ? (
+        <div className="cal-tabs cal-anim">
+          <button
+            type="button"
+            className={`cal-tab${tab === 'calendar' ? ' is-active' : ''}`}
+            onClick={() => setTab('calendar')}
+          >
+            Calendar
+          </button>
+          <button
+            type="button"
+            className={`cal-tab${tab === 'approved' ? ' is-active' : ''}`}
+            onClick={() => setTab('approved')}
+          >
+            Approved
+            <span className="cal-tab-badge is-success">{approved.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`cal-tab${tab === 'mine' ? ' is-active' : ''}`}
+            onClick={() => setTab('mine')}
+          >
+            My Requests
+            <span className="cal-tab-badge">{myReqs.length}</span>
+          </button>
+        </div>
+
+        {banner && (
+          <div className={`cal-banner ${banner.kind === 'success' ? 'is-success' : 'is-error'} cal-anim`}>
+            {banner.text}
+          </div>
+        )}
+
+        {tab === 'calendar' && error && leaves.length === 0 && shifts.length === 0 ? (
           <div className="cal-error cal-anim">
             <p className="cal-error-title">Couldn't load calendar</p>
             <p className="cal-error-sub">{error}</p>
             <button className="cal-retry" onClick={() => fetchMonth(cursor)}>Try again</button>
           </div>
-        ) : (
+        ) : tab === 'calendar' ? (
           <>
             <div className="cal-panel cal-anim">
               <div className="cal-month-bar">
@@ -882,6 +1036,32 @@ export default function Calendar() {
               </>
             )}
           </>
+        ) : tab === 'approved' ? (
+          <ApprovedList
+            items={approved}
+            loading={reqLoading}
+            actingId={actingId}
+            onCancel={cancelLeave}
+            onOpenForm={openModal}
+          />
+        ) : (
+          <MyRequestsList
+            items={myReqs}
+            loading={reqLoading}
+            actingId={actingId}
+            onCancel={cancelLeave}
+            onOpenForm={openModal}
+          />
+        )}
+
+        {modalOpen && (
+          <TimeOffSheet
+            form={form}
+            setForm={setForm}
+            submitting={submitting}
+            onClose={() => setModalOpen(false)}
+            onSubmit={submitTimeOff}
+          />
         )}
       </div>
     </>
@@ -894,5 +1074,281 @@ function ChevronIcon({ dir }) {
       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={dir === 'left' ? 'M15 18l-6-6 6-6' : 'M9 6l6 6-6 6'} />
     </svg>
+  );
+}
+
+function RequestCardSkeleton() {
+  return (
+    <div className="cal-req-card" style={{ height: 110 }}>
+      <div className="cal-skel" style={{ height: '100%' }} />
+    </div>
+  );
+}
+
+function ApprovedList({ items, loading, actingId, onCancel, onOpenForm }) {
+  if (loading && items.length === 0) {
+    return (
+      <>
+        {Array.from({ length: 3 }).map((_, i) => <RequestCardSkeleton key={i} />)}
+      </>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <div className="cal-empty cal-anim">
+        <p className="cal-empty-title">No approved requests</p>
+        <p className="cal-empty-sub">Approved leave requests will appear here.</p>
+        <button className="cal-retry" onClick={onOpenForm} style={{ marginTop: '0.9rem' }}>
+          + Request time off
+        </button>
+      </div>
+    );
+  }
+  return items.map((req) => {
+    const name = leaveName(req);
+    const employee = req?.employeeId && typeof req.employeeId === 'object' ? req.employeeId : null;
+    return (
+      <div key={req._id} className="cal-req-card cal-anim">
+        <div className="cal-req-top">
+          <span className="cal-req-avatar">{initials(name)}</span>
+          <div className="cal-req-meta">
+            <div className="cal-req-name">{name}</div>
+            <div className="cal-req-sub">{employee?.email || req.leaveType || 'Leave'}</div>
+          </div>
+          <span className="cal-req-pill is-approved">Approved</span>
+        </div>
+        <div className="cal-req-grid">
+          <div>
+            <div className="cal-req-field-label">Type</div>
+            <div className="cal-req-field-value">{req.leaveType || '—'}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">Days</div>
+            <div className="cal-req-field-value">{req.numberOfDays ?? '—'}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">From</div>
+            <div className="cal-req-field-value">{formatGB(req.startDate)}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">To</div>
+            <div className="cal-req-field-value">{formatGB(req.endDate)}</div>
+          </div>
+          {req.approvedAt && (
+            <div>
+              <div className="cal-req-field-label">Approved</div>
+              <div className="cal-req-field-value">{formatGB(req.approvedAt)}</div>
+            </div>
+          )}
+          {approverName(req) && (
+            <div>
+              <div className="cal-req-field-label">By</div>
+              <div className="cal-req-field-value">{approverName(req)}</div>
+            </div>
+          )}
+        </div>
+        {req.reason && (
+          <div className="cal-req-reason">
+            <span className="cal-req-reason-label">Reason</span>
+            {req.reason}
+          </div>
+        )}
+        <div className="cal-req-actions">
+          <button
+            type="button"
+            className="cal-req-btn is-cancel"
+            onClick={() => onCancel(req)}
+            disabled={actingId === req._id}
+          >
+            {actingId === req._id ? <span className="cal-mini-spin" /> : null}
+            Cancel Leave
+          </button>
+        </div>
+      </div>
+    );
+  });
+}
+
+function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm }) {
+  if (loading && items.length === 0) {
+    return (
+      <>
+        {Array.from({ length: 3 }).map((_, i) => <RequestCardSkeleton key={i} />)}
+      </>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <div className="cal-empty cal-anim">
+        <p className="cal-empty-title">No requests yet</p>
+        <p className="cal-empty-sub">You haven't filed any time off.</p>
+        <button className="cal-retry" onClick={onOpenForm} style={{ marginTop: '0.9rem' }}>
+          + Request time off
+        </button>
+      </div>
+    );
+  }
+  return items.map((req) => {
+    const status = normalizeStatus(req.status);
+    const pillClass = status === 'approved' ? 'is-approved'
+      : status === 'rejected' ? 'is-rejected'
+      : status === 'cancelled' ? 'is-cancelled'
+      : 'is-pending';
+    const pillLabel = status === 'approved' ? 'Approved'
+      : status === 'rejected' ? 'Rejected'
+      : status === 'cancelled' ? 'Cancelled'
+      : 'Pending';
+    const cancellable = status === 'pending' || status === 'approved';
+    return (
+      <div key={req._id} className="cal-req-card cal-anim">
+        <div className="cal-req-top">
+          <div className="cal-req-meta" style={{ paddingLeft: 2 }}>
+            <div className="cal-req-name">{req.leaveType || 'Leave'}</div>
+            <div className="cal-req-sub">
+              {formatGB(req.startDate)} → {formatGB(req.endDate)}
+            </div>
+          </div>
+          <span className={`cal-req-pill ${pillClass}`}>{pillLabel}</span>
+        </div>
+        <div className="cal-req-grid">
+          <div>
+            <div className="cal-req-field-label">Days</div>
+            <div className="cal-req-field-value">{req.numberOfDays ?? '—'}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">Submitted</div>
+            <div className="cal-req-field-value">{formatGB(req.createdAt)}</div>
+          </div>
+        </div>
+        {req.reason && (
+          <div className="cal-req-reason">
+            <span className="cal-req-reason-label">Reason</span>
+            {req.reason}
+          </div>
+        )}
+        {req.rejectionReason && status === 'rejected' && (
+          <div className="cal-req-reason is-reject">
+            <span className="cal-req-reason-label">Rejection reason</span>
+            {req.rejectionReason}
+          </div>
+        )}
+        {cancellable && (
+          <div className="cal-req-actions">
+            <button
+              type="button"
+              className="cal-req-btn is-cancel"
+              onClick={() => onCancel(req)}
+              disabled={actingId === req._id}
+            >
+              {actingId === req._id ? <span className="cal-mini-spin" /> : null}
+              Cancel Request
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  });
+}
+
+function TimeOffSheet({ form, setForm, submitting, onClose, onSubmit }) {
+  return (
+    <div className="cal-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <form
+        className="cal-sheet"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={onSubmit}
+      >
+        <div className="cal-sheet-grip" />
+        <h2 className="cal-sheet-title">Request Time Off</h2>
+        <p className="cal-sheet-sub">Submit a new leave request</p>
+
+        <div className="cal-form-row">
+          <label className="cal-form-label">Leave Type</label>
+          <select
+            className="cal-form-select"
+            value={form.leaveType}
+            onChange={(e) => setForm((f) => ({ ...f, leaveType: e.target.value }))}
+          >
+            {LEAVE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
+        <div className="cal-form-row is-double">
+          <div className="cal-form-field">
+            <label className="cal-form-label">Start Date</label>
+            <input
+              type="date"
+              className="cal-form-input"
+              value={form.startDate}
+              onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value, endDate: f.endDate < e.target.value ? e.target.value : f.endDate }))}
+            />
+            <div className="cal-half-row">
+              {[['full', 'Full'], ['am', 'AM'], ['pm', 'PM']].map(([k, l]) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`cal-half-chip${form.startHalfDay === k ? ' is-on' : ''}`}
+                  onClick={() => setForm((f) => ({ ...f, startHalfDay: k }))}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="cal-form-field">
+            <label className="cal-form-label">End Date</label>
+            <input
+              type="date"
+              className="cal-form-input"
+              value={form.endDate}
+              min={form.startDate}
+              onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))}
+            />
+            <div className="cal-half-row">
+              {[['full', 'Full'], ['am', 'AM'], ['pm', 'PM']].map(([k, l]) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`cal-half-chip${form.endHalfDay === k ? ' is-on' : ''}`}
+                  onClick={() => setForm((f) => ({ ...f, endHalfDay: k }))}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="cal-form-row">
+          <label className="cal-form-label">Reason</label>
+          <textarea
+            className="cal-form-textarea"
+            placeholder="A short reason for the time off…"
+            value={form.reason}
+            onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+            maxLength={500}
+          />
+        </div>
+
+        <div className="cal-sheet-actions">
+          <button
+            type="button"
+            className="cal-sheet-btn is-secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="cal-sheet-btn is-primary"
+            disabled={submitting}
+          >
+            {submitting ? <span className="cal-mini-spin" /> : null}
+            Submit
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
