@@ -27,6 +27,13 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
+    console.log('[HRMS-API-ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      status: err?.response?.status,
+      url: err?.config?.url,
+      baseURL: err?.config?.baseURL,
+    });
     const status = err?.response?.status;
     const url = err?.config?.url || '';
     const isAuthRoute =
