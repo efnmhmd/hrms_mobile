@@ -21,7 +21,7 @@ and store them as **GitHub repository Secrets**. None of these are ever committe
 | `IOS_TEAM_ID`                     | Your 10-character Apple Developer **Team ID**         |
 | `APPSTORE_API_KEY_ID`             | App Store Connect API **Key ID**                      |
 | `APPSTORE_API_ISSUER_ID`         | App Store Connect API **Issuer ID**                   |
-| `APPSTORE_API_PRIVATE_KEY`        | Contents of the App Store Connect API key `.p8` file  |
+| `APPSTORE_API_PRIVATE_KEY_BASE64`  | App Store Connect API key `.p8` file → base64          |
 | `IOS_KEYCHAIN_PASSWORD`           | Any random string you make up (temp keychain password)|
 
 > Provisioning profiles are **not** stored manually — the workflow uses
@@ -49,8 +49,10 @@ without your Apple ID/password or 2FA.
    - **Issuer ID** (a UUID at the top) → secret `APPSTORE_API_ISSUER_ID`
    - **Key ID** (in the table) → secret `APPSTORE_API_KEY_ID`
    - A **Download** button for `AuthKey_XXXXXXXXXX.p8` → **download it now** (you can only download once).
-4. The downloaded `.p8` file's text content goes into `APPSTORE_API_PRIVATE_KEY`.
-   Paste the whole file including the `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----` lines.
+4. Convert the downloaded `.p8` to **base64** and store it as `APPSTORE_API_PRIVATE_KEY_BASE64`
+   (base64 avoids the newline-corruption that causes `401` auth failures):
+   - **macOS / Linux / Git Bash:** `base64 -w0 AuthKey_XXXXXXXXXX.p8`
+   - **PowerShell:** `[Convert]::ToBase64String([IO.File]::ReadAllBytes("AuthKey_XXXXXXXXXX.p8")) | Set-Clipboard`
 
 ## Step 3 — Distribution certificate → `IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`
 
@@ -67,7 +69,7 @@ You need an **Apple Distribution** certificate exported as a `.p12` (certificate
 1. Create a CSR (Certificate Signing Request). On Windows you can use OpenSSL:
    ```bash
    openssl genrsa -out ios_dist.key 2048
-   openssl req -new -key ios_dist.key -out ios_dist.csr -subj "/emailAddress=you@example.com, CN=HRMS Distribution, C=GB"
+   openssl req -new -key ios_dist.key -out ios_dist.csr -subj "/emailAddress=you@example.com/CN=HRMS Distribution/C=GB"
    ```
 2. Go to <https://developer.apple.com/account/resources/certificates/list> → **+** →
    **Apple Distribution** → upload `ios_dist.csr` → download `distribution.cer`.

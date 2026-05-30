@@ -90,12 +90,19 @@ jobs:
 
       - name: Write App Store Connect API key
         env:
-          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          # Store the .p8 as BASE64 in this secret (see docs) so newlines can't be lost.
+          APPSTORE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPSTORE_API_PRIVATE_KEY_BASE64 }}
           APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
         run: |
           API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPSTORE_API_KEY_ID}.p8"
-          echo "$APPSTORE_API_PRIVATE_KEY" > "$API_KEY_PATH"
+          echo -n "$APPSTORE_API_PRIVATE_KEY_BASE64" | base64 --decode -o "$API_KEY_PATH"
           echo "API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
+
+          # Fail fast with a clear message if the decoded key isn't a valid PEM.
+          if ! head -n 1 "$API_KEY_PATH" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "::error::Decoded API key is not a valid .p8 PEM. Re-create APPSTORE_API_PRIVATE_KEY_BASE64 from 'base64 -w0 AuthKey_XXXX.p8'."
+            exit 1
+          fi
 
       - name: Generate ExportOptions.plist
         env:
