@@ -9,11 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       export_method:
-        description: "Export method (auto = detect from the provisioning profile)"
+        description: "Export method for the IPA"
         type: choice
-        default: auto
+        default: app-store
         options:
-          - auto        # detect from the provisioning profile you uploaded as a secret
           - app-store   # for App Store / TestFlight (NOT directly installable on a device)
           - ad-hoc      # installable on devices whose UDIDs are registered in your Apple account
           - development # installable on registered dev devices
@@ -29,8 +28,8 @@ jobs:
     runs-on: macos-14
 
     env:
-      # Manual override from a manual run; empty on push -> auto-detect from the profile.
-      EXPORT_METHOD_OVERRIDE: ${{ github.event.inputs.export_method || 'auto' }}
+      # Falls back to app-store when triggered by a push (no manual input available).
+      EXPORT_METHOD: ${{ github.event.inputs.export_method || 'app-store' }}
 
     steps:
       - name: Checkout repository
@@ -89,57 +88,21 @@ jobs:
           # Make the temp keychain the one xcodebuild searches.
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
-      - name: Install provisioning profile (manual signing)
+      - name: Write App Store Connect API key
         env:
-          # base64 of the .mobileprovision you downloaded from developer.apple.com
-          PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          # Store the .p8 as BASE64 in this secret (see docs) so newlines can't be lost.
+          APPSTORE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPSTORE_API_PRIVATE_KEY_BASE64 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
         run: |
-          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
-          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          echo -n "$APPSTORE_API_PRIVATE_KEY_BASE64" | base64 --decode -o "$API_KEY_PATH"
+          echo "API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
 
-          if [ -z "$PROVISION_PROFILE_BASE64" ]; then
-            echo "::error::Secret IOS_PROVISION_PROFILE_BASE64 is empty. See docs/ios-cicd-setup.md."
+          # Fail fast with a clear message if the decoded key isn't a valid PEM.
+          if ! head -n 1 "$API_KEY_PATH" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "::error::Decoded API key is not a valid .p8 PEM. Re-create APPSTORE_API_PRIVATE_KEY_BASE64 from 'base64 -w0 AuthKey_XXXX.p8'."
             exit 1
           fi
-
-          # Decode the profile and read its embedded plist.
-          echo -n "$PROVISION_PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
-          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
-
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$PROFILE_PLIST")
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$PROFILE_PLIST")
-
-          # Detect the export method from the profile's contents.
-          if /usr/libexec/PlistBuddy -c "Print :ProvisionsAllDevices" "$PROFILE_PLIST" >/dev/null 2>&1; then
-            DETECTED="enterprise"
-          elif /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" "$PROFILE_PLIST" >/dev/null 2>&1; then
-            if /usr/libexec/PlistBuddy -c "Print :Entitlements:get-task-allow" "$PROFILE_PLIST" 2>/dev/null | grep -qi true; then
-              DETECTED="development"
-            else
-              DETECTED="ad-hoc"
-            fi
-          else
-            DETECTED="app-store"
-          fi
-
-          if [ "$EXPORT_METHOD_OVERRIDE" = "auto" ] || [ -z "$EXPORT_METHOD_OVERRIDE" ]; then
-            FINAL_METHOD="$DETECTED"
-          else
-            FINAL_METHOD="$EXPORT_METHOD_OVERRIDE"
-          fi
-
-          # Install the profile where Xcode looks for it.
-          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$PROFILES_DIR"
-          cp "$PROFILE_PATH" "$PROFILES_DIR/$PROFILE_UUID.mobileprovision"
-
-          echo "Profile name : $PROFILE_NAME"
-          echo "Profile UUID : $PROFILE_UUID"
-          echo "Method       : $FINAL_METHOD (detected: $DETECTED, override: $EXPORT_METHOD_OVERRIDE)"
-
-          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
-          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
-          echo "EXPORT_METHOD=$FINAL_METHOD" >> "$GITHUB_ENV"
 
       - name: Generate ExportOptions.plist
         env:
@@ -155,14 +118,7 @@ jobs:
             <key>teamID</key>
             <string>${IOS_TEAM_ID}</string>
             <key>signingStyle</key>
-            <string>manual</string>
-            <key>signingCertificate</key>
-            <string>Apple Distribution</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>com.talentshield.hrms</key>
-              <string>${PROFILE_NAME}</string>
-            </dict>
+            <string>automatic</string>
             <key>destination</key>
             <string>export</string>
             <key>stripSwiftSymbols</key>
@@ -173,9 +129,11 @@ jobs:
           echo "Using export method: $EXPORT_METHOD"
           cat "$RUNNER_TEMP/ExportOptions.plist"
 
-      - name: Archive (xcodebuild, manual signing)
+      - name: Archive (xcodebuild)
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
           xcodebuild archive \
             -workspace ios/App/App.xcworkspace \
@@ -183,17 +141,26 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="$IOS_TEAM_ID"
 
       - name: Export IPA (xcodebuild)
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
@@ -203,8 +170,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Clean up signing material
+      - name: Clean up keychain
         if: ${{ always() }}
         run: |
           security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
-          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision" || true
+          rm -f "$API_KEY_PATH" || true
