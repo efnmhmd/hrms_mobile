@@ -1,0 +1,170 @@
+name: Build iOS IPA
+
+# Builds a signed .ipa whenever you push to the `prod` branch.
+# You can also trigger it manually (Actions tab -> Build iOS IPA -> Run workflow)
+# and choose a different export method.
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+    inputs:
+      export_method:
+        description: "Export method for the IPA"
+        type: choice
+        default: app-store
+        options:
+          - app-store   # for App Store / TestFlight (NOT directly installable on a device)
+          - ad-hoc      # installable on devices whose UDIDs are registered in your Apple account
+          - development # installable on registered dev devices
+          - enterprise  # only for Apple Developer Enterprise Program accounts
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    # iOS builds must run on macOS. macos-14 = Apple Silicon with recent Xcode.
+    runs-on: macos-14
+
+    env:
+      # Falls back to app-store when triggered by a push (no manual input available).
+      EXPORT_METHOD: ${{ github.event.inputs.export_method || 'app-store' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "15.4"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build web assets + sync Capacitor (iOS)
+        run: |
+          npm run build
+          npx cap sync ios
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios/App
+        run: pod install
+
+      # ----------------------------------------------------------------------
+      # Code signing setup. All of these values come from GitHub repo Secrets.
+      # See docs/ios-cicd-setup.md for exactly how to create each one.
+      # ----------------------------------------------------------------------
+      - name: Install Apple distribution certificate
+        env:
+          DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/dist_cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          # Decode the certificate from the base64 secret.
+          echo -n "$DIST_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          # Create a temporary keychain just for this build.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import the certificate (+ its private key) into the keychain.
+          security import "$CERT_PATH" -P "$DIST_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+          # Make the temp keychain the one xcodebuild searches.
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Write App Store Connect API key
+        env:
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+        run: |
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          echo "$APPSTORE_API_PRIVATE_KEY" > "$API_KEY_PATH"
+          echo "API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate ExportOptions.plist
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>${EXPORT_METHOD}</string>
+            <key>teamID</key>
+            <string>${IOS_TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          echo "Using export method: $EXPORT_METHOD"
+          cat "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Archive (xcodebuild)
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          xcodebuild archive \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID"
+
+      - name: Export IPA (xcodebuild)
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hrms-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clean up keychain
+        if: ${{ always() }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
+          rm -f "$API_KEY_PATH" || true
