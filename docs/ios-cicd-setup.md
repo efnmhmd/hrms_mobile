@@ -11,22 +11,24 @@ run page (bottom, "Artifacts" → `hrms-ios-ipa`).
 
 ## What you need from Apple (one-time)
 
-You need an **Apple Developer Program** membership ($99/yr). From it you'll collect 5 things
-and store them as **GitHub repository Secrets**. None of these are ever committed to the repo.
+You need an **Apple Developer Program** membership ($99/yr). From it you'll collect a few
+things and store them as **GitHub repository Secrets**. None of these are ever committed to the repo.
 
-| GitHub Secret name                | What it is                                            |
-| --------------------------------- | ----------------------------------------------------- |
-| `IOS_DIST_CERT_P12_BASE64`        | Your **Apple Distribution certificate** (.p12) → base64 |
-| `IOS_DIST_CERT_PASSWORD`          | The password you set when exporting the .p12          |
-| `IOS_TEAM_ID`                     | Your 10-character Apple Developer **Team ID**         |
-| `APPSTORE_API_KEY_ID`             | App Store Connect API **Key ID**                      |
-| `APPSTORE_API_ISSUER_ID`         | App Store Connect API **Issuer ID**                   |
-| `APPSTORE_API_PRIVATE_KEY_BASE64`  | App Store Connect API key `.p8` file → base64          |
-| `IOS_KEYCHAIN_PASSWORD`           | Any random string you make up (temp keychain password)|
+The build uses **manual code signing**: you create a provisioning profile once and upload it as
+a secret. The build signs offline and never contacts Apple — so there are no App Store Connect
+API keys and no `401` authentication failures.
 
-> Provisioning profiles are **not** stored manually — the workflow uses
-> `-allowProvisioningUpdates` with your App Store Connect API key, so Xcode creates/downloads
-> the right provisioning profile during the build.
+| GitHub Secret name             | What it is                                              |
+| ------------------------------ | ------------------------------------------------------- |
+| `IOS_TEAM_ID`                  | Your 10-character Apple Developer **Team ID**           |
+| `IOS_DIST_CERT_P12_BASE64`     | Your **Apple Distribution certificate** (.p12) → base64 |
+| `IOS_DIST_CERT_PASSWORD`       | The password you set when exporting the .p12            |
+| `IOS_PROVISION_PROFILE_BASE64` | Your **provisioning profile** (.mobileprovision) → base64 |
+| `IOS_KEYCHAIN_PASSWORD`        | Any random string you make up (temp keychain password)  |
+
+> The workflow auto-detects the export method (`app-store` / `ad-hoc` / `development` /
+> `enterprise`) from the profile you upload, so the kind of profile you create decides the
+> output. You can override it on a manual run.
 
 ---
 
@@ -36,25 +38,7 @@ and store them as **GitHub repository Secrets**. None of these are ever committe
 2. Scroll to **Membership details**.
 3. Copy the **Team ID** (10 chars, e.g. `A1B2C3D4E5`).
 
-## Step 2 — App Store Connect API key → `APPSTORE_API_KEY_ID`, `APPSTORE_API_ISSUER_ID`, `APPSTORE_API_PRIVATE_KEY`
-
-This is the modern "Apple console information" you asked about — it lets CI talk to Apple
-without your Apple ID/password or 2FA.
-
-1. Go to <https://appstoreconnect.apple.com/access/integrations/api> (Users and Access → **Integrations** → App Store Connect API).
-2. Click **+** to generate a new key.
-   - Name: e.g. `github-ci`
-   - Access role: **App Manager** (enough to build/sign/upload).
-3. After creating it you'll see:
-   - **Issuer ID** (a UUID at the top) → secret `APPSTORE_API_ISSUER_ID`
-   - **Key ID** (in the table) → secret `APPSTORE_API_KEY_ID`
-   - A **Download** button for `AuthKey_XXXXXXXXXX.p8` → **download it now** (you can only download once).
-4. Convert the downloaded `.p8` to **base64** and store it as `APPSTORE_API_PRIVATE_KEY_BASE64`
-   (base64 avoids the newline-corruption that causes `401` auth failures):
-   - **macOS / Linux / Git Bash:** `base64 -w0 AuthKey_XXXXXXXXXX.p8`
-   - **PowerShell:** `[Convert]::ToBase64String([IO.File]::ReadAllBytes("AuthKey_XXXXXXXXXX.p8")) | Set-Clipboard`
-
-## Step 3 — Distribution certificate → `IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`
+## Step 2 — Distribution certificate → `IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`
 
 You need an **Apple Distribution** certificate exported as a `.p12` (certificate + private key).
 
@@ -73,12 +57,18 @@ You need an **Apple Distribution** certificate exported as a `.p12` (certificate
    ```
 2. Go to <https://developer.apple.com/account/resources/certificates/list> → **+** →
    **Apple Distribution** → upload `ios_dist.csr` → download `distribution.cer`.
-3. Convert to `.p12`:
+3. Convert to `.p12`. **Use `-legacy`** — OpenSSL 3 (shipped with Git for Windows) otherwise
+   produces a `.p12` Apple's `security` tool can't import (you'd get
+   *"MAC verification failed"* even with the right password):
    ```bash
    openssl x509 -in distribution.cer -inform DER -out ios_dist.pem -outform PEM
-   openssl pkcs12 -export -inkey ios_dist.key -in ios_dist.pem -out dist_cert.p12
+   openssl pkcs12 -export -legacy -inkey ios_dist.key -in ios_dist.pem -out dist_cert.p12
    ```
    The password you type here is `IOS_DIST_CERT_PASSWORD`.
+
+> ⚠️ **Never paste the `.p12`, its base64, or the `.p8` into chat, email, or tickets** — they
+> contain your private key. If you ever do, revoke the certificate at
+> <https://developer.apple.com/account/resources/certificates/list> and issue a new one.
 
 ### Convert the .p12 to base64 → `IOS_DIST_CERT_P12_BASE64`
 
