@@ -16,17 +16,35 @@ const ROUTE_TITLES = {
   '/admin/time-history':  'Time History',
   '/admin/archived':      'Archived',
   '/admin/calendar':      'Calendar',
+  '/admin/teams':         'Manage Teams',
+  '/admin/leave-balances': 'Leave Balances',
+  '/admin/shifts':        'Shift Management',
   '/manager/employees':   'Employees',
   '/manager/org-chart':   'Org Chart',
   '/manager/approvals':   'Approvals',
   '/manager/objectives':  'Objectives',
+  '/manager/team':        'My Team',
   '/manager/calendar':    'Calendar',
   '/soon':                'Coming soon',
 };
 
+// Pattern-based titles for routes that include params (so a static map can't
+// match the full path). First matching regex wins.
+const ROUTE_TITLE_PATTERNS = [
+  { test: /^\/employees\/[^/]+$/, title: 'Employee' },
+];
+
 function humanisePath(path) {
   const last = (path.split('/').filter(Boolean).pop() || 'Back');
   return last.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function titleForPath(pathname) {
+  if (ROUTE_TITLES[pathname]) return ROUTE_TITLES[pathname];
+  for (const p of ROUTE_TITLE_PATTERNS) {
+    if (p.test.test(pathname)) return p.title;
+  }
+  return humanisePath(pathname);
 }
 
 const styles = `
@@ -168,7 +186,7 @@ export default function TabLayout() {
   const isTabRoot = !!matchedTab;
   const pageTitle = isTabRoot
     ? matchedTab.label
-    : ROUTE_TITLES[location.pathname] || humanisePath(location.pathname);
+    : titleForPath(location.pathname);
 
   // Edge swipe-back gesture — Telegram-iOS style.
   // Touch must start within the left 24px edge. We follow the drag, then on

@@ -549,7 +549,7 @@ export default function AdminEmployees() {
                 type="button"
                 className="emp-card emp-anim"
                 style={{ animationDelay: `${Math.min(i, 6) * 30}ms` }}
-                onClick={() => navigate(soon(fullName(emp)))}
+                onClick={() => navigate(`/employees/${emp._id || emp.id}`)}
               >
                 <span className="emp-avatar">{initials(emp)}</span>
                 <span className="emp-meta">

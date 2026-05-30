@@ -315,7 +315,7 @@ export default function AdminOrgChart() {
                 depth={0}
                 expanded={expanded}
                 onToggle={toggle}
-                onOpenDetail={(emp) => navigate(soon(fullName(emp)))}
+                onOpenDetail={(emp) => navigate(`/employees/${nodeId(emp)}`)}
               />
             ))}
           </div>

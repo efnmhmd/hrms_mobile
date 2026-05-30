@@ -189,7 +189,7 @@ export default function AdminStats() {
     { key: 'clocked-in', label: 'Clocked In', icon: <ClockIcon />, value: data?.clockedIn,  to: '/admin/time-history', accent: true },
     { key: 'absent',     label: 'Absent',     icon: <AlertIcon />, value: data?.absent,     to: '/admin/time-history', warn: true },
     { key: 'leaves',     label: 'Leaves',     icon: <LeaveIcon />, value: data?.leaves,     to: soon('Pending Leaves') },
-    { key: 'expenses',   label: 'Expenses',   icon: <ExpenseIcon />, value: data?.expenses, to: soon('Pending Expenses') },
+    { key: 'expenses',   label: 'Expenses',   icon: <ExpenseIcon />, value: data?.expenses, to: '/admin/expenses' },
   ]), [data]);
 
   return (

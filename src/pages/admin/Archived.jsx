@@ -362,7 +362,7 @@ export default function AdminArchived() {
                   type="button"
                   className="ar-card ar-anim"
                   style={{ animationDelay: `${Math.min(i, 6) * 30}ms` }}
-                  onClick={() => navigate(soon(fullName(emp)))}
+                  onClick={() => navigate(`/employees/${emp._id || emp.id}`)}
                 >
                   <span className="ar-avatar">{initials(emp)}</span>
                   <span className="ar-meta">
