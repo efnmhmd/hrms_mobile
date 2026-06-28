@@ -33,6 +33,9 @@ api.interceptors.response.use(
       status: err?.response?.status,
       url: err?.config?.url,
       baseURL: err?.config?.baseURL,
+      // Surface the server's actual error body — banners only show a summary,
+      // and some endpoints return the reason on a non-`message` field.
+      data: err?.response?.data,
     });
     const status = err?.response?.status;
     const url = err?.config?.url || '';
@@ -41,10 +44,13 @@ api.interceptors.response.use(
       url.includes('/auth/signup') ||
       url.includes('/auth/validate-session');
 
-    // Mirror web behavior: 401 on a non-auth route → drop the session.
-    // The app shell will route the user back to Login on next render.
+    // Mirror web behavior: 401 on a non-auth route → drop the session and
+    // notify the app shell so it can route the user back to Login. Without
+    // this signal the shell keeps `authed` true and the user lingers on a
+    // dead session, getting "Authentication required" on every action.
     if (status === 401 && !isAuthRoute) {
       await clearSession();
+      window.dispatchEvent(new Event('hrms:session-expired'));
     }
     return Promise.reject(err);
   }

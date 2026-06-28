@@ -1,18 +1,32 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../utils/api';
+import { getUser } from '../../utils/auth';
 import { getErrorMessage } from '../../utils/errorHandler';
 
-// Employee's own documents (payslips, contracts, policies shared with them).
-// No confirmed mobile endpoint, so we probe a few candidate routes scoped to
-// the signed-in user and degrade to a friendly empty state. Read-only: tapping
-// a document opens it; uploads stay on the web app.
+// Employee Documents — folder-based, mirroring the web app's Documents page.
+//
+// The mobile app previously hit a flat `/documents` route that doesn't drive the
+// real feature, so employees couldn't see or open any folder. The web frontend
+// works entirely through the document-management folders API, so we do the same:
+//
+//   GET  /documentManagement/folders                         -> { folders: [...] }
+//   GET  /documentManagement/folders/:folderId               -> { folder, folderPermissions, breadcrumb, contents }
+//   GET  /documentManagement/employees/:empId/my-documents   -> ensures the "My Documents" folder exists
+//   GET  /documentManagement/documents/:id/view              -> file blob (inline)
+//   GET  /documentManagement/documents/:id/download          -> file blob (attachment)
+//   POST /documentManagement/folders/:folderId/documents     -> upload (FormData)
+//   DELETE /documentManagement/documents/:id                 -> delete
+//
+// Each folder/item carries canEdit / canDelete flags resolved by the backend, so
+// the UI just respects them rather than re-deriving permissions.
 
-const DOC_ENDPOINTS = ['/documents/my', '/documents?scope=me', '/employee-documents', '/documents'];
+const BASE = '/documentManagement';
 
 const styles = `
   @keyframes ed-fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes ed-skel { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.85; } }
   @keyframes ed-spin { to { transform: rotate(360deg); } }
+  @keyframes ed-fadein { from { opacity: 0; } to { opacity: 1; } }
 
   .ed-wrap { padding: 0.85rem 1rem 6rem; }
   .ed-anim { animation: ed-fadeUp 0.4s cubic-bezier(0.22,1,0.36,1) both; }
@@ -26,7 +40,7 @@ const styles = `
   }
   .ed-header-text { min-width: 0; flex: 1; }
   .ed-header-eyebrow { font-size: 0.6rem; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: #84a98c; margin: 0; }
-  .ed-header-title { font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; line-height: 1.1; font-weight: 400; color: #2f3e46; letter-spacing: -0.01em; margin: 0.1rem 0 0; }
+  .ed-header-title { font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; line-height: 1.1; font-weight: 400; color: #2f3e46; letter-spacing: -0.01em; margin: 0.1rem 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ed-count { font-size: 0.7rem; color: #7a8e84; margin-left: 0.25rem; }
   .ed-refresh {
     flex-shrink: 0; width: 36px; height: 36px; border-radius: 10px;
@@ -36,6 +50,16 @@ const styles = `
   .ed-refresh:disabled { opacity: 0.55; }
   .ed-refresh:not(:disabled):active { transform: scale(0.94); }
   .ed-refresh.is-busy svg { animation: ed-spin 0.8s linear infinite; }
+
+  .ed-back {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: rgba(255,255,255,0.6); border: 1px solid rgba(132,169,140,0.4); color: #52796f;
+    border-radius: 999px; padding: 0.4rem 0.8rem 0.4rem 0.6rem; font-size: 0.74rem; font-weight: 600;
+    -webkit-tap-highlight-color: transparent; cursor: pointer; margin-bottom: 0.7rem;
+  }
+  .ed-back:active { transform: scale(0.97); }
+  .ed-crumbs { font-size: 0.68rem; color: #7a8e84; margin: 0 0 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ed-crumbs b { color: #52796f; font-weight: 600; }
 
   .ed-search { position: relative; margin-bottom: 0.85rem; }
   .ed-search svg { position: absolute; left: 0.7rem; top: 50%; transform: translateY(-50%); color: #84a98c; pointer-events: none; }
@@ -48,14 +72,11 @@ const styles = `
   .ed-search input::placeholder { color: #a7b6ac; }
   .ed-search input:focus { outline: none; border-color: #52796f; box-shadow: 0 0 0 3px rgba(82, 121, 111, 0.12); }
 
-  .ed-chips { display: flex; gap: 0.4rem; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 0.85rem; padding-bottom: 4px; }
-  .ed-chips::-webkit-scrollbar { display: none; }
-  .ed-chip {
-    flex-shrink: 0; padding: 0.42rem 0.8rem; border-radius: 999px; font-size: 0.74rem; font-weight: 600; letter-spacing: 0.04em;
-    border: 1px solid rgba(132, 169, 140, 0.4); background: rgba(255, 255, 255, 0.6); color: #52796f;
-    -webkit-tap-highlight-color: transparent; cursor: pointer; text-transform: capitalize;
+  .ed-group-label {
+    display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0 0.5rem;
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #84a98c;
   }
-  .ed-chip.is-active { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; border-color: transparent; }
+  .ed-group-label::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(132,169,140,0.3), transparent); }
 
   .ed-list { display: flex; flex-direction: column; gap: 0.45rem; }
   .ed-card {
@@ -66,6 +87,12 @@ const styles = `
     transition: transform 0.12s, background 0.15s; text-decoration: none;
   }
   .ed-card:active { transform: scale(0.99); background: #f7f8f6; }
+
+  .ed-folder-icon {
+    width: 40px; height: 40px; border-radius: 9px; flex-shrink: 0;
+    background: rgba(82,121,111,0.12); border: 1px solid rgba(82,121,111,0.2); color: #52796f;
+    display: flex; align-items: center; justify-content: center;
+  }
   .ed-file {
     width: 40px; height: 46px; border-radius: 7px; flex-shrink: 0; position: relative;
     background: linear-gradient(135deg, rgba(132, 169, 140, 0.2), rgba(82, 121, 111, 0.14));
@@ -80,6 +107,30 @@ const styles = `
   .ed-sub { margin-top: 2px; font-size: 0.68rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ed-chev { color: #b8c4bc; flex-shrink: 0; }
 
+  .ed-row-actions { display: flex; align-items: center; gap: 0.15rem; flex-shrink: 0; }
+  .ed-act-btn {
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: none; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; color: #84a98c;
+    -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s;
+  }
+  .ed-act-btn:active { transform: scale(0.92); }
+  .ed-act-btn.is-view { color: #52796f; }
+  .ed-act-btn.is-view:active { background: rgba(82,121,111,0.12); }
+  .ed-act-btn.is-dl { color: #6f8c98; }
+  .ed-act-btn.is-dl:active { background: rgba(111,140,152,0.12); }
+  .ed-act-btn.is-del { color: #b85c50; }
+  .ed-act-btn.is-del:active { background: rgba(192,117,106,0.12); }
+  .ed-act-btn:disabled { opacity: 0.5; }
+
+  .ed-fab {
+    position: fixed; right: 1.1rem; bottom: calc(1.1rem + env(safe-area-inset-bottom, 0px)); z-index: 40;
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.8rem 1.05rem; border-radius: 999px; border: none;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; font-size: 0.82rem; font-weight: 600;
+    box-shadow: 0 8px 22px rgba(53,79,82,0.32); -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+  .ed-fab:active { transform: scale(0.96); }
+  .ed-fab:disabled { opacity: 0.6; }
+
   .ed-skel { height: 64px; border-radius: 13px; background: linear-gradient(90deg, #eef2ef 0%, #f6f8f4 50%, #eef2ef 100%); animation: ed-skel 1.2s ease-in-out infinite; margin-bottom: 0.45rem; }
   .ed-empty, .ed-error {
     padding: 2rem 1rem; border-radius: 16px;
@@ -92,28 +143,85 @@ const styles = `
   .ed-empty-sub, .ed-error-sub { font-size: 0.75rem; margin: 0.25rem 0 0; opacity: 0.85; }
   .ed-retry { margin-top: 0.85rem; padding: 0.55rem 1.1rem; border-radius: 999px; border: none; background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .ed-retry:active { transform: scale(0.97); }
+
+  .ed-banner { margin-bottom: 0.85rem; padding: 0.6rem 0.85rem; border-radius: 12px; font-size: 0.78rem; font-weight: 500; }
+  .ed-banner.is-success { background: linear-gradient(135deg, #f0f5f2, #eaf2ec); border-left: 3px solid #52796f; color: #2f3e46; }
+  .ed-banner.is-error { background: linear-gradient(135deg, #fdf3f2, #fdecea); border-left: 3px solid #c0756a; color: #7a3028; }
+
+  /* ── Document viewer overlay ── */
+  .ed-viewer { position: fixed; inset: 0; z-index: 60; background: #2f3e46; display: flex; flex-direction: column; animation: ed-fadein 0.2s ease both; }
+  .ed-viewer-bar {
+    flex-shrink: 0; display: flex; align-items: center; gap: 0.6rem;
+    padding: calc(0.6rem + env(safe-area-inset-top, 0px)) 0.85rem 0.6rem;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #f0f5f2;
+  }
+  .ed-viewer-title { flex: 1; min-width: 0; font-size: 0.88rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ed-viewer-btn { background: rgba(255,255,255,0.15); border: none; color: #f0f5f2; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent; flex-shrink: 0; }
+  .ed-viewer-btn:active { transform: scale(0.94); }
+  .ed-viewer-body { flex: 1; min-height: 0; position: relative; background: #525659; }
+  .ed-viewer-frame { width: 100%; height: 100%; border: none; }
+  .ed-viewer-img { width: 100%; height: 100%; object-fit: contain; }
+  .ed-viewer-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.8rem; color: #cad2c5; padding: 1.5rem; text-align: center; }
+  .ed-viewer-spin { width: 34px; height: 34px; border: 3px solid rgba(202,210,197,0.25); border-top-color: #cad2c5; border-radius: 50%; animation: ed-spin 0.8s linear infinite; }
+  .ed-viewer-fallback-btn { margin-top: 0.5rem; padding: 0.6rem 1.1rem; border-radius: 999px; border: none; background: #cad2c5; color: #2f3e46; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+
+  /* ── Upload modal ── */
+  .ed-modal-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(47,62,70,0.6); backdrop-filter: blur(3px); display: flex; align-items: flex-end; justify-content: center; padding: 0; animation: ed-fadein 0.18s ease; }
+  @media (min-width: 480px) { .ed-modal-overlay { align-items: center; padding: 1rem; } }
+  .ed-modal { background: #fff; width: 100%; max-width: 460px; border-radius: 18px 18px 0 0; box-shadow: 0 -10px 40px rgba(47,62,70,0.25); display: flex; flex-direction: column; max-height: 92vh; animation: ed-fadeUp 0.28s cubic-bezier(0.22,1,0.36,1); }
+  @media (min-width: 480px) { .ed-modal { border-radius: 18px; } }
+  .ed-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.1rem 1.2rem 0.85rem; border-bottom: 1px solid #eaefeb; }
+  .ed-modal-eyebrow { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #84a98c; margin: 0; }
+  .ed-modal-title { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; font-weight: 400; color: #2f3e46; margin: 0.1rem 0 0; }
+  .ed-modal-sub { font-size: 0.72rem; color: #52796f; font-weight: 500; margin: 0.2rem 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ed-modal-close { background: none; border: none; color: #84a98c; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; -webkit-tap-highlight-color: transparent; }
+  .ed-modal-body { padding: 1.1rem 1.2rem; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .ed-field { margin-bottom: 0.95rem; }
+  .ed-field:last-child { margin-bottom: 0; }
+  .ed-label { display: block; font-size: 0.62rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #52796f; margin-bottom: 0.4rem; }
+  .ed-input, .ed-select { width: 100%; padding: 0.65rem 0.85rem; border: 1.5px solid #d4ddd6; border-radius: 9px; font-family: 'DM Sans', sans-serif; font-size: 16px; color: #2f3e46; background: #fff; outline: none; box-sizing: border-box; }
+  .ed-input:focus, .ed-select:focus { border-color: #52796f; box-shadow: 0 0 0 3px rgba(82,121,111,0.12); }
+  .ed-file-input { padding: 0; }
+  .ed-file-input::-webkit-file-upload-button, .ed-file-input::file-selector-button { padding: 0.65rem 0.85rem; margin-right: 0.7rem; border: none; border-right: 1.5px solid #d4ddd6; background: linear-gradient(135deg, #f0f5f2, #eaf2ec); color: #354f52; font-family: 'DM Sans', sans-serif; font-size: 0.78rem; font-weight: 500; cursor: pointer; }
+  .ed-modal-foot { display: flex; gap: 0.5rem; padding: 0.85rem 1.2rem calc(0.85rem + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #eaefeb; background: #fafbfa; }
+  .ed-btn { flex: 1; padding: 0.8rem; border-radius: 10px; border: none; font-family: 'DM Sans', sans-serif; font-size: 0.85rem; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; }
+  .ed-btn.is-ghost { background: #fff; color: #52796f; border: 1px solid #d4ddd6; }
+  .ed-btn.is-primary { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; box-shadow: 0 3px 12px rgba(53,79,82,0.22); }
+  .ed-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .ed-btn-spin { width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: ed-spin 0.7s linear infinite; }
 `;
+
+const UPLOAD_CATEGORIES = [
+  { value: 'other', label: 'Other' },
+  { value: 'contract', label: 'Contract' },
+  { value: 'identification', label: 'Identification' },
+  { value: 'certificate', label: 'Certificate' },
+  { value: 'payslip', label: 'Payslip' },
+  { value: 'policy', label: 'Policy' },
+];
+
+const ALLOWED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.jpg', '.jpeg', '.png', '.gif', '.txt'];
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 function docName(d) {
   return d?.name || d?.title || d?.fileName || d?.filename || d?.originalName || 'Untitled document';
 }
-function docUrl(d) {
-  return d?.url || d?.fileUrl || d?.downloadUrl || d?.link || d?.path || null;
-}
 function docExt(d) {
-  const src = d?.fileType || d?.type || d?.mimeType || docName(d) || '';
+  const src = d?.fileType || d?.mimeType || d?.type || docName(d) || '';
   const fromName = String(docName(d)).split('.').pop();
-  const raw = (src.includes('/') ? src.split('/').pop() : src) || fromName || '';
+  const raw = (String(src).includes('/') ? String(src).split('/').pop() : src) || fromName || '';
   return String(raw).replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase() || 'file';
 }
 function extKind(ext) {
   if (ext === 'pdf') return 'pdf';
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'svg'].includes(ext)) return 'img';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'svg', 'bmp'].includes(ext)) return 'img';
   if (['xls', 'xlsx', 'csv'].includes(ext)) return 'sheet';
   return 'doc';
 }
-function docCategory(d) {
-  return d?.category || d?.type || d?.folder || 'Other';
+function isInlineViewable(mimeType, ext) {
+  const m = String(mimeType || '').toLowerCase();
+  if (m.includes('pdf') || m.startsWith('image/')) return true;
+  return ext === 'pdf' || extKind(ext) === 'img';
 }
 function formatSize(bytes) {
   const n = Number(bytes);
@@ -129,85 +237,455 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function FolderIcon({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
+}
+function FileGlyph({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
+    </svg>
+  );
+}
+
 export default function EmployeeDocuments() {
-  const [docs, setDocs] = useState([]);
+  const [empId, setEmpId] = useState(null);
+
+  // Root folder list
+  const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('all');
 
-  async function fetchDocs() {
-    setLoading(true);
-    setError(null);
-    let lastErr = null;
-    for (const ep of DOC_ENDPOINTS) {
-      try {
-        const { data } = await api.get(ep);
-        const list = data?.documents || data?.data || data?.files || (Array.isArray(data) ? data : null);
-        if (Array.isArray(list)) {
-          setDocs(list);
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        lastErr = err;
-        if (err?.response?.status && err.response.status !== 404) break;
-      }
-    }
-    if (lastErr && lastErr?.response?.status && lastErr.response.status !== 404) {
-      setError(getErrorMessage(lastErr));
-    } else {
-      setDocs([]);
-    }
-    setLoading(false);
+  // Current open folder
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [folderData, setFolderData] = useState(null); // { folder, folderPermissions, breadcrumb, contents }
+  const [folderLoading, setFolderLoading] = useState(false);
+  const [folderError, setFolderError] = useState(null);
+
+  const [viewer, setViewer] = useState(null); // { doc, url, mime, inline, loading, failed }
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [banner, setBanner] = useState(null);
+
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadCategory, setUploadCategory] = useState('other');
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  function flash(kind, text) {
+    setBanner({ kind, text });
+    setTimeout(() => setBanner(null), 3000);
   }
 
-  useEffect(() => {
-    fetchDocs();
+  // ── Root folders ────────────────────────────────────────────────────────
+  const fetchFolders = useCallback(async (employeeId) => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Ensure the employee's "My Documents" folder exists so it shows up even
+      // before anything has been uploaded into it.
+      if (employeeId) {
+        try { await api.get(`${BASE}/employees/${employeeId}/my-documents`); } catch { /* non-fatal */ }
+      }
+      const { data } = await api.get(`${BASE}/folders`);
+      const list = data?.folders || (Array.isArray(data) ? data : []);
+      setFolders(Array.isArray(list) ? list : []);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const categories = useMemo(() => {
-    const set = new Set();
-    for (const d of docs) set.add(docCategory(d));
-    return ['all', ...[...set].sort((a, b) => String(a).localeCompare(String(b)))];
-  }, [docs]);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const user = await getUser();
+      const id = user?.employeeHubId || user?.employeeId || user?._id || user?.id || null;
+      if (!active) return;
+      setEmpId(id);
+      fetchFolders(id);
+    })();
+    return () => { active = false; };
+  }, [fetchFolders]);
 
-  const filtered = useMemo(() => {
+  // ── Folder contents ─────────────────────────────────────────────────────
+  const fetchFolderContents = useCallback(async (folderId) => {
+    setFolderLoading(true);
+    setFolderError(null);
+    try {
+      const { data } = await api.get(`${BASE}/folders/${folderId}`);
+      setFolderData({
+        folder: data?.folder || null,
+        folderPermissions: data?.folderPermissions || { canEdit: false, canDelete: false },
+        breadcrumb: Array.isArray(data?.breadcrumb) ? data.breadcrumb : [],
+        contents: Array.isArray(data?.contents)
+          ? data.contents
+          : (Array.isArray(data?.documents) ? data.documents.map((d) => ({ ...d, type: 'document' })) : []),
+      });
+    } catch (err) {
+      setFolderError(getErrorMessage(err));
+      setFolderData(null);
+    } finally {
+      setFolderLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentFolderId) fetchFolderContents(currentFolderId);
+  }, [currentFolderId, fetchFolderContents]);
+
+  function openFolder(folderId) {
+    if (!folderId) return;
+    setCurrentFolderId(String(folderId));
+  }
+
+  function goBack() {
+    const crumbs = folderData?.breadcrumb || [];
+    if (crumbs.length > 1) {
+      // Navigate to the parent folder.
+      const parent = crumbs[crumbs.length - 2];
+      setFolderData(null);
+      setCurrentFolderId(String(parent._id));
+    } else {
+      setCurrentFolderId(null);
+      setFolderData(null);
+      // Refresh root counts in case anything changed inside a folder.
+      fetchFolders(empId);
+    }
+  }
+
+  // Revoke viewer object URL on close / unmount.
+  useEffect(() => () => { if (viewer?.url) URL.revokeObjectURL(viewer.url); }, [viewer?.url]);
+
+  async function openDocument(doc) {
+    const id = doc?._id || doc?.id;
+    if (!id) return;
+    const mime = doc.mimeType || doc.fileType || '';
+    const ext = docExt(doc);
+    const inline = isInlineViewable(mime, ext);
+    setViewer({ doc, url: null, mime, inline, loading: true, failed: false });
+    try {
+      const res = await api.get(`${BASE}/documents/${id}/view`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      setViewer({ doc, url, mime, inline, loading: false, failed: false });
+    } catch {
+      setViewer({ doc, url: null, mime, inline, loading: false, failed: true });
+    }
+  }
+
+  function closeViewer() {
+    if (viewer?.url) URL.revokeObjectURL(viewer.url);
+    setViewer(null);
+  }
+
+  async function downloadDocument(doc) {
+    const id = doc?._id || doc?.id;
+    if (!id) return;
+    setDownloadingId(id);
+    try {
+      const res = await api.get(`${BASE}/documents/${id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: doc.mimeType || 'application/octet-stream' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', docName(doc));
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  async function deleteDocument(doc) {
+    const id = doc?._id || doc?.id;
+    if (!id) return;
+    if (!window.confirm(`Delete "${docName(doc)}"? This can't be undone.`)) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`${BASE}/documents/${id}`);
+      setFolderData((prev) => prev
+        ? { ...prev, contents: prev.contents.filter((it) => String(it._id || it.id) !== String(id)) }
+        : prev);
+      flash('success', 'Document deleted');
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  // ── Upload ──────────────────────────────────────────────────────────────
+  function openUpload() {
+    setUploadFile(null);
+    setUploadCategory('other');
+    setUploadOpen(true);
+  }
+  function closeUpload() {
+    if (uploading) return;
+    setUploadOpen(false);
+    setUploadFile(null);
+  }
+
+  async function submitUpload() {
+    if (!uploadFile) { flash('error', 'Please choose a file'); return; }
+    const lower = uploadFile.name.toLowerCase();
+    if (!ALLOWED_EXTENSIONS.some((e) => lower.endsWith(e))) {
+      flash('error', 'Only PDF, Word, Excel, PowerPoint, image and text files are allowed.');
+      return;
+    }
+    if (uploadFile.size > MAX_UPLOAD_BYTES) {
+      flash('error', 'File is too large. Max size is 10MB.');
+      return;
+    }
+    if (!currentFolderId) { flash('error', 'Open a folder before uploading'); return; }
+
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', uploadFile);
+      fd.append('category', uploadCategory);
+      if (empId) {
+        fd.append('ownerId', empId);
+        fd.append('accessControl', JSON.stringify({ visibility: 'employee', allowedUserIds: [] }));
+      }
+      await api.post(`${BASE}/folders/${currentFolderId}/documents`, fd);
+      setUploadOpen(false);
+      setUploadFile(null);
+      flash('success', 'Document uploaded');
+      fetchFolderContents(currentFolderId);
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // ── Derived: grouped + filtered root folders ────────────────────────────
+  const ownerIdOf = (f) => f?.createdByEmployeeId || f?.ownerInfo?._id || f?.ownerInfo?.id || null;
+  const isOwnMyDocuments = (f) => {
+    if (String(f?.name || '').trim() !== 'My Documents') return false;
+    const owner = ownerIdOf(f);
+    const inView = Array.isArray(f?.permissions?.viewEmployeeIds)
+      && f.permissions.viewEmployeeIds.some((x) => String(x) === String(empId));
+    return (owner && String(owner) === String(empId)) || inView;
+  };
+
+  const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return docs.filter((d) => {
-      if (category !== 'all' && docCategory(d) !== category) return false;
-      if (!q) return true;
-      return [docName(d), docCategory(d)].filter(Boolean).join(' ').toLowerCase().includes(q);
-    });
-  }, [docs, query, category]);
+    const mine = [];
+    const shared = [];
+    for (const f of folders) {
+      if (!f?._id) continue;
+      const name = String(f.name || '').toLowerCase();
+      if (q && !name.includes(q)) continue;
+      if (isOwnMyDocuments(f)) mine.push(f);
+      else shared.push(f);
+    }
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+    return { mine: mine.sort(byName), shared: shared.sort(byName) };
+  }, [folders, query, empId]);
 
+  const totalFolders = grouped.mine.length + grouped.shared.length;
+  const canUploadHere = Boolean(folderData?.folderPermissions?.canEdit);
+
+  // ── Render: inside a folder ─────────────────────────────────────────────
+  if (currentFolderId) {
+    const crumbs = folderData?.breadcrumb || [];
+    const title = folderData?.folder?.name || 'Folder';
+    const items = folderData?.contents || [];
+    const subfolders = items.filter((it) => it.type === 'folder');
+    const docs = items.filter((it) => it.type !== 'folder');
+
+    return (
+      <>
+        <style>{styles}</style>
+        <div className="ed-wrap">
+          <button type="button" className="ed-back ed-anim" onClick={goBack}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            Back
+          </button>
+
+          <header className="ed-header ed-anim" style={{ paddingTop: 0 }}>
+            <div className="ed-header-icon"><FolderIcon size={18} /></div>
+            <div className="ed-header-text">
+              <p className="ed-header-eyebrow">Documents</p>
+              <h1 className="ed-header-title">{title}</h1>
+            </div>
+            <button
+              type="button"
+              className={`ed-refresh${folderLoading ? ' is-busy' : ''}`}
+              onClick={() => fetchFolderContents(currentFolderId)}
+              disabled={folderLoading}
+              aria-label="Refresh"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </header>
+
+          {crumbs.length > 0 && (
+            <p className="ed-crumbs ed-anim">
+              {crumbs.map((c, i) => (
+                <span key={c._id || i}>
+                  {i > 0 && ' / '}
+                  {i === crumbs.length - 1 ? <b>{c.name}</b> : c.name}
+                </span>
+              ))}
+            </p>
+          )}
+
+          {banner && (
+            <div className={`ed-banner ${banner.kind === 'success' ? 'is-success' : 'is-error'} ed-anim`}>{banner.text}</div>
+          )}
+
+          {folderLoading ? (
+            <div>{Array.from({ length: 5 }).map((_, i) => <div key={i} className="ed-skel" />)}</div>
+          ) : folderError ? (
+            <div className="ed-error ed-anim">
+              <p className="ed-error-title">Couldn't open folder</p>
+              <p className="ed-error-sub">{folderError}</p>
+              <button className="ed-retry" onClick={() => fetchFolderContents(currentFolderId)}>Try again</button>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="ed-empty ed-anim">
+              <div className="ed-empty-glyph"><FileGlyph /></div>
+              <p className="ed-empty-title">This folder is empty</p>
+              <p className="ed-empty-sub">
+                {canUploadHere ? 'Tap “Upload” to add a document.' : 'No documents have been shared here yet.'}
+              </p>
+            </div>
+          ) : (
+            <div className="ed-list">
+              {subfolders.map((f, i) => (
+                <button
+                  key={f._id || i}
+                  type="button"
+                  className="ed-card ed-anim"
+                  style={{ animationDelay: `${Math.min(i, 6) * 25}ms` }}
+                  onClick={() => openFolder(f._id)}
+                >
+                  <span className="ed-folder-icon"><FolderIcon /></span>
+                  <span className="ed-meta">
+                    <span className="ed-name">{f.name || 'Folder'}</span>
+                    <span className="ed-sub">Folder</span>
+                  </span>
+                  <span className="ed-chev" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                  </span>
+                </button>
+              ))}
+
+              {docs.map((d, i) => {
+                const id = d._id || d.id;
+                const ext = docExt(d);
+                const kind = extKind(ext);
+                const date = formatDate(d.createdAt || d.uploadedAt || d.date);
+                const size = formatSize(d.fileSize || d.size);
+                const sub = [date, size].filter(Boolean).join(' · ') || 'Document';
+                return (
+                  <div key={id || i} className="ed-card ed-anim" style={{ animationDelay: `${Math.min(i, 6) * 25}ms` }}>
+                    <span className={`ed-file is-${kind}`} onClick={() => openDocument(d)}><span className="ed-file-ext">{ext}</span></span>
+                    <span className="ed-meta" onClick={() => openDocument(d)}>
+                      <span className="ed-name">{docName(d)}</span>
+                      <span className="ed-sub">{sub}</span>
+                    </span>
+                    <span className="ed-row-actions">
+                      <button type="button" className="ed-act-btn is-view" onClick={() => openDocument(d)} aria-label="View">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" />
+                        </svg>
+                      </button>
+                      <button type="button" className="ed-act-btn is-dl" onClick={() => downloadDocument(d)} disabled={downloadingId === id} aria-label="Download">
+                        {downloadingId === id ? <span className="ed-btn-spin" /> : (
+                          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                          </svg>
+                        )}
+                      </button>
+                      {d.canDelete && (
+                        <button type="button" className="ed-act-btn is-del" onClick={() => deleteDocument(d)} disabled={deletingId === id} aria-label="Delete">
+                          {deletingId === id ? <span className="ed-btn-spin" /> : (
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                            </svg>
+                          )}
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {canUploadHere && !folderLoading && (
+          <button type="button" className="ed-fab" onClick={openUpload}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Upload
+          </button>
+        )}
+
+        {uploadOpen && (
+          <UploadModal
+            folderName={title}
+            file={uploadFile}
+            category={uploadCategory}
+            uploading={uploading}
+            fileInputRef={fileInputRef}
+            onFile={setUploadFile}
+            onCategory={setUploadCategory}
+            onClose={closeUpload}
+            onSubmit={submitUpload}
+          />
+        )}
+
+        {viewer && <DocumentViewerOverlay viewer={viewer} onClose={closeViewer} onRetry={() => openDocument(viewer.doc)} onDownload={() => downloadDocument(viewer.doc)} />}
+      </>
+    );
+  }
+
+  // ── Render: root folder list ────────────────────────────────────────────
   return (
     <>
       <style>{styles}</style>
       <div className="ed-wrap">
         <header className="ed-header ed-anim">
-          <div className="ed-header-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
-            </svg>
-          </div>
+          <div className="ed-header-icon"><FolderIcon size={18} /></div>
           <div className="ed-header-text">
-            <p className="ed-header-eyebrow">My Requests</p>
+            <p className="ed-header-eyebrow">My Workspace</p>
             <h1 className="ed-header-title">
               Documents
-              {!loading && !error && <span className="ed-count"> · {filtered.length}</span>}
+              {!loading && !error && <span className="ed-count"> · {totalFolders}</span>}
             </h1>
           </div>
           <button
             type="button"
             className={`ed-refresh${loading ? ' is-busy' : ''}`}
-            onClick={fetchDocs}
+            onClick={() => fetchFolders(empId)}
             disabled={loading}
             aria-label="Refresh"
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M23 4v6h-6M1 20v-6h6" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
             </svg>
@@ -215,84 +693,187 @@ export default function EmployeeDocuments() {
         </header>
 
         <div className="ed-search ed-anim">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.3-4.3" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
           </svg>
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search documents…"
+            placeholder="Search folders…"
             autoCapitalize="none"
             autoCorrect="off"
           />
         </div>
 
-        {categories.length > 1 && (
-          <div className="ed-chips ed-anim">
-            {categories.map((c) => (
-              <button key={c} type="button" className={`ed-chip ${category === c ? 'is-active' : ''}`} onClick={() => setCategory(c)}>
-                {c === 'all' ? 'All' : c}
-              </button>
-            ))}
-          </div>
+        {banner && (
+          <div className={`ed-banner ${banner.kind === 'success' ? 'is-success' : 'is-error'} ed-anim`}>{banner.text}</div>
         )}
 
         {loading ? (
-          <div>{Array.from({ length: 6 }).map((_, i) => <div key={i} className="ed-skel" />)}</div>
+          <div>{Array.from({ length: 5 }).map((_, i) => <div key={i} className="ed-skel" />)}</div>
         ) : error ? (
           <div className="ed-error ed-anim">
             <p className="ed-error-title">Couldn't load documents</p>
             <p className="ed-error-sub">{error}</p>
-            <button className="ed-retry" onClick={fetchDocs}>Try again</button>
+            <button className="ed-retry" onClick={() => fetchFolders(empId)}>Try again</button>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : totalFolders === 0 ? (
           <div className="ed-empty ed-anim">
-            <div className="ed-empty-glyph">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
-              </svg>
-            </div>
-            <p className="ed-empty-title">{query || category !== 'all' ? 'No matches' : 'No documents yet'}</p>
+            <div className="ed-empty-glyph"><FolderIcon /></div>
+            <p className="ed-empty-title">{query ? 'No matching folders' : 'No folders yet'}</p>
             <p className="ed-empty-sub">
-              {query || category !== 'all'
-                ? 'Try a different search term or category.'
-                : 'Documents shared with you — payslips, contracts, policies — will appear here.'}
+              {query
+                ? 'Try a different search term.'
+                : 'Folders shared with you and your personal documents will appear here.'}
             </p>
           </div>
         ) : (
-          <div className="ed-list">
-            {filtered.map((d, i) => {
-              const ext = docExt(d);
-              const kind = extKind(ext);
-              const url = docUrl(d);
-              const date = formatDate(d.uploadedAt || d.createdAt || d.date);
-              const size = formatSize(d.size || d.fileSize);
-              const sub = [docCategory(d), date, size].filter((x) => x && x !== 'Other').join(' · ') || docCategory(d);
-              const Tag = url ? 'a' : 'div';
-              const linkProps = url ? { href: url, target: '_blank', rel: 'noreferrer' } : {};
-              return (
-                <Tag key={d._id || d.id || i} className="ed-card ed-anim" style={{ animationDelay: `${Math.min(i, 6) * 25}ms` }} {...linkProps}>
-                  <span className={`ed-file is-${kind}`}><span className="ed-file-ext">{ext}</span></span>
-                  <span className="ed-meta">
-                    <span className="ed-name">{docName(d)}</span>
-                    {sub && <span className="ed-sub">{sub}</span>}
-                  </span>
-                  {url && (
-                    <span className="ed-chev" aria-hidden="true">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M7 17L17 7M17 7H8M17 7v9" />
-                      </svg>
-                    </span>
-                  )}
-                </Tag>
-              );
-            })}
-          </div>
+          <>
+            {grouped.mine.length > 0 && (
+              <>
+                <p className="ed-group-label ed-anim">My Documents</p>
+                <div className="ed-list">
+                  {grouped.mine.map((f, i) => <FolderCard key={f._id} folder={f} index={i} onOpen={openFolder} />)}
+                </div>
+              </>
+            )}
+            {grouped.shared.length > 0 && (
+              <>
+                <p className="ed-group-label ed-anim" style={{ marginTop: grouped.mine.length ? '1rem' : '0.4rem' }}>Shared with me</p>
+                <div className="ed-list">
+                  {grouped.shared.map((f, i) => <FolderCard key={f._id} folder={f} index={i} onOpen={openFolder} />)}
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
+
+      {viewer && <DocumentViewerOverlay viewer={viewer} onClose={closeViewer} onRetry={() => openDocument(viewer.doc)} onDownload={() => downloadDocument(viewer.doc)} />}
     </>
+  );
+}
+
+function FolderCard({ folder, index, onOpen }) {
+  const count = folder?.documentCount;
+  const sub = typeof count === 'number'
+    ? `${count} ${count === 1 ? 'document' : 'documents'}`
+    : 'Folder';
+  return (
+    <button
+      type="button"
+      className="ed-card ed-anim"
+      style={{ animationDelay: `${Math.min(index, 6) * 25}ms` }}
+      onClick={() => onOpen(folder._id)}
+    >
+      <span className="ed-folder-icon"><FolderIcon /></span>
+      <span className="ed-meta">
+        <span className="ed-name">{folder.name || 'Folder'}</span>
+        <span className="ed-sub">
+          {sub}
+          {folder?.ownerInfo && (folder.ownerInfo.firstName || folder.ownerInfo.lastName)
+            ? ` · ${[folder.ownerInfo.firstName, folder.ownerInfo.lastName].filter(Boolean).join(' ')}`
+            : ''}
+        </span>
+      </span>
+      <span className="ed-chev" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </span>
+    </button>
+  );
+}
+
+function DocumentViewerOverlay({ viewer, onClose, onRetry, onDownload }) {
+  const title = docName(viewer.doc);
+  return (
+    <div className="ed-viewer">
+      <div className="ed-viewer-bar">
+        <span className="ed-viewer-title">{title}</span>
+        {viewer.url && (
+          <button type="button" className="ed-viewer-btn" onClick={onDownload} aria-label="Download">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+            </svg>
+          </button>
+        )}
+        <button type="button" className="ed-viewer-btn" onClick={onClose} aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div className="ed-viewer-body">
+        {viewer.loading ? (
+          <div className="ed-viewer-center">
+            <div className="ed-viewer-spin" />
+            <span>Opening document…</span>
+          </div>
+        ) : viewer.failed ? (
+          <div className="ed-viewer-center">
+            <span>Couldn't open this document.</span>
+            <button type="button" className="ed-viewer-fallback-btn" onClick={onRetry}>Try again</button>
+          </div>
+        ) : !viewer.inline ? (
+          <div className="ed-viewer-center">
+            <span>This file type can't be previewed here.</span>
+            <button type="button" className="ed-viewer-fallback-btn" onClick={onDownload}>Download to open</button>
+          </div>
+        ) : viewer.mime && viewer.mime.toLowerCase().startsWith('image/') ? (
+          <img className="ed-viewer-img" src={viewer.url} alt={title} />
+        ) : (
+          <iframe className="ed-viewer-frame" src={viewer.url} title={title} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UploadModal({ folderName, file, category, uploading, fileInputRef, onFile, onCategory, onClose, onSubmit }) {
+  return (
+    <div className="ed-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="ed-modal">
+        <div className="ed-modal-head">
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p className="ed-modal-eyebrow">Add file</p>
+            <h3 className="ed-modal-title">Upload Document</h3>
+            <p className="ed-modal-sub">{folderName}</p>
+          </div>
+          <button type="button" className="ed-modal-close" onClick={onClose} aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="ed-modal-body">
+          <div className="ed-field">
+            <label className="ed-label" htmlFor="ed-upload-file">File</label>
+            <input
+              id="ed-upload-file"
+              ref={fileInputRef}
+              type="file"
+              className="ed-input ed-file-input"
+              accept={ALLOWED_EXTENSIONS.join(',')}
+              onChange={(e) => onFile(e.target.files?.[0] || null)}
+            />
+            {file && <p className="ed-modal-sub" style={{ marginTop: '0.4rem' }}>{file.name} · {formatSize(file.size) || ''}</p>}
+          </div>
+          <div className="ed-field">
+            <label className="ed-label" htmlFor="ed-upload-cat">Category</label>
+            <select id="ed-upload-cat" className="ed-select" value={category} onChange={(e) => onCategory(e.target.value)}>
+              {UPLOAD_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="ed-modal-foot">
+          <button type="button" className="ed-btn is-ghost" onClick={onClose} disabled={uploading}>Cancel</button>
+          <button type="button" className="ed-btn is-primary" onClick={onSubmit} disabled={uploading || !file}>
+            {uploading ? <><span className="ed-btn-spin" /> Uploading…</> : 'Upload'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -67,6 +67,19 @@ export default function App() {
     })();
   }, []);
 
+  // When any API call hits a 401, the axios interceptor clears the stored
+  // session and fires this event. Flip the shell back to the logged-out state
+  // so the user is shown Login instead of stranded on a dead session.
+  useEffect(() => {
+    function handleSessionExpired() {
+      setUserGroup(null);
+      setAuthed(false);
+      navigate('/', { replace: true });
+    }
+    window.addEventListener('hrms:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('hrms:session-expired', handleSessionExpired);
+  }, [navigate]);
+
   async function handleLogin(group) {
     const resolved = group || getUserGroup(await getUser());
     setUserGroup(resolved);

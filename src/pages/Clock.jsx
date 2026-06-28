@@ -62,9 +62,38 @@ export default function Clock() {
     }
   }
 
+  async function startBreak() {
+    setActing(true);
+    setError('');
+    try {
+      await Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {});
+      await api.post('/clock/user/start-break', {});
+      await refresh();
+    } catch (err) {
+      setError(err?.response?.data?.message || err.message || 'Failed to start break');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function resumeWork() {
+    setActing(true);
+    setError('');
+    try {
+      await Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {});
+      await api.post('/clock/user/resume-work', {});
+      await refresh();
+    } catch (err) {
+      setError(err?.response?.data?.message || err.message || 'Failed to resume work');
+    } finally {
+      setActing(false);
+    }
+  }
+
   const currentStatus = status?.status || 'not-clocked-in';
   const meta = STATUS_META[currentStatus] || STATUS_META['not-clocked-in'];
   const isActive = currentStatus === 'clocked-in' || currentStatus === 'on-break';
+  const onBreak = currentStatus === 'on-break';
 
   const elapsed = status?.clockIn && isActive
     ? formatElapsed(now - new Date(status.clockIn).getTime())
@@ -98,15 +127,34 @@ export default function Clock() {
                 </div>
               </div>
 
-              <div className="mt-8">
+              <div className="mt-8 space-y-3">
                 {isActive ? (
-                  <button
-                    onClick={clockOut}
-                    disabled={acting}
-                    className="w-full rounded-xl bg-red-500 py-4 text-base font-semibold text-white shadow-sm transition active:bg-red-600 disabled:opacity-60"
-                  >
-                    {acting ? 'Clocking out…' : 'Clock out'}
-                  </button>
+                  <>
+                    {onBreak ? (
+                      <button
+                        onClick={resumeWork}
+                        disabled={acting}
+                        className="w-full rounded-xl bg-brand py-4 text-base font-semibold text-white shadow-sm transition active:bg-brand-dark disabled:opacity-60"
+                      >
+                        {acting ? 'Resuming…' : 'Resume work'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={startBreak}
+                        disabled={acting}
+                        className="w-full rounded-xl bg-amber-500 py-4 text-base font-semibold text-white shadow-sm transition active:bg-amber-600 disabled:opacity-60"
+                      >
+                        {acting ? 'Starting break…' : 'Start break'}
+                      </button>
+                    )}
+                    <button
+                      onClick={clockOut}
+                      disabled={acting}
+                      className="w-full rounded-xl bg-red-500 py-4 text-base font-semibold text-white shadow-sm transition active:bg-red-600 disabled:opacity-60"
+                    >
+                      {acting ? 'Clocking out…' : 'Clock out'}
+                    </button>
+                  </>
                 ) : (
                   <button
                     onClick={clockIn}

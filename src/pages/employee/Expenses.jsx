@@ -139,6 +139,20 @@ const styles = `
   .ee-btn-cancel { background: #fff; color: #7a8e84; border: 1.5px solid #d4ddd6; }
   .ee-btn-submit { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #f0f5f2; box-shadow: 0 4px 14px rgba(53,79,82,0.2); }
   .ee-mini-spin { width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: ee-spin 0.7s linear infinite; }
+
+  /* ── Claim-type toggle ── */
+  .ee-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; padding: 0.25rem; margin-bottom: 1rem; background: rgba(132, 169, 140, 0.12); border-radius: 13px; }
+  .ee-toggle-btn {
+    display: flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.6rem; border: none; border-radius: 10px;
+    background: transparent; color: #52796f; font-family: 'DM Sans', sans-serif; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  }
+  .ee-toggle-btn.is-active { background: #fff; color: #2f3e46; box-shadow: 0 1px 4px rgba(47, 62, 70, 0.1); }
+  .ee-toggle-btn:not(.is-active):active { transform: scale(0.97); }
+
+  .ee-total { margin: 0.2rem 0 0.85rem; padding: 0.7rem 0.85rem; border-radius: 12px; background: linear-gradient(135deg, #f0f5f2, #eaf2ec); display: flex; align-items: baseline; justify-content: space-between; }
+  .ee-total-lab { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #7a8e84; }
+  .ee-total-val { font-size: 1.2rem; font-weight: 700; color: #2f3e46; font-variant-numeric: tabular-nums; }
 `;
 
 const FILTERS = [
@@ -156,8 +170,28 @@ function normalizeStatus(s) {
 }
 
 function amountOf(e) {
-  const n = Number(e?.amount ?? e?.total ?? e?.value ?? 0);
-  return Number.isFinite(n) ? n : 0;
+  // Backend stores the claim total on `totalAmount` (see web AddExpense);
+  // keep the older keys as fallbacks for safety.
+  const direct = Number(e?.totalAmount ?? e?.amount ?? e?.receiptValue ?? e?.total ?? e?.value);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  // `totalAmount` is denormalized and (on some API builds) comes back 0/empty —
+  // notably for mileage, whose total is server-computed. Recompute from the
+  // claim's own fields so a saved claim never renders as £0.00. Mirrors the web
+  // AddExpense math and the mileage total shown in this screen's modal.
+  const tax = Number(e?.tax);
+  const taxPart = Number.isFinite(tax) ? tax : 0;
+
+  const dist = Number(e?.mileage?.distance);
+  const rate = Number(e?.mileage?.ratePerUnit);
+  if (Number.isFinite(dist) && Number.isFinite(rate) && dist > 0 && rate > 0) {
+    return dist * rate + taxPart;
+  }
+
+  const receipt = Number(e?.receiptValue);
+  if (Number.isFinite(receipt) && receipt > 0) return receipt + taxPart;
+
+  return Number.isFinite(direct) ? direct : 0;
 }
 
 function currencyOf(e) {
@@ -230,12 +264,36 @@ export default function EmployeeExpenses() {
   }
 
   function openModal() {
-    setForm({ amount: '', currency: 'GBP', category: 'Travel', date: todayYMD(), description: '' });
+    setForm({
+      claimType: 'receipt',
+      amount: '', currency: 'GBP', category: 'Travel', date: todayYMD(), supplier: '', description: '',
+      // Mileage-specific (mirrors web AddExpense): distance × ratePerUnit + tax
+      distance: '', unit: 'miles', ratePerUnit: '0.45', tax: '',
+    });
     setModalOpen(true);
+  }
+
+  // Total for the mileage claim type — keep in sync with the web calculation.
+  function mileageTotal(f) {
+    const d = Number(f?.distance);
+    const r = Number(f?.ratePerUnit);
+    const t = Number(f?.tax);
+    const sub = (Number.isFinite(d) ? d : 0) * (Number.isFinite(r) ? r : 0);
+    return sub + (Number.isFinite(t) ? t : 0);
+  }
+
+  // Total for the receipt claim type — mirrors web AddExpense: receiptValue + tax.
+  function receiptTotal(f) {
+    const a = Number(f?.amount);
+    const t = Number(f?.tax);
+    return (Number.isFinite(a) ? a : 0) + (Number.isFinite(t) ? t : 0);
   }
 
   async function submitExpense(e) {
     e?.preventDefault?.();
+    if (form.claimType === 'mileage') {
+      return submitMileage();
+    }
     const amt = Number(form.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       flash('error', 'Enter a valid amount');
@@ -245,20 +303,73 @@ export default function EmployeeExpenses() {
       flash('error', 'Pick a category');
       return;
     }
-    if ((form.description || '').trim().length < 3) {
-      flash('error', 'Add a short description');
+    if ((form.supplier || '').trim().length < 2) {
+      flash('error', 'Enter a supplier / merchant');
       return;
     }
     setSubmitting(true);
     try {
+      // Match the backend's expense schema (see web AddExpense): submit a
+      // receipt claim with totalAmount/notes/supplier — not amount/description.
+      // totalAmount = receiptValue + tax (mirrors web's calculateReceiptTotal).
+      const tax = Number(form.tax);
+      const taxVal = Number.isFinite(tax) && tax > 0 ? tax : 0;
       await api.post('/expenses', {
-        amount: amt,
+        claimType: 'receipt',
+        date: form.date,
         currency: form.currency,
         category: form.category,
-        date: form.date,
-        description: form.description.trim(),
+        tax: taxVal,
+        totalAmount: amt + taxVal,
+        receiptValue: amt,
+        supplier: form.supplier.trim(),
+        tags: [],
+        notes: form.description.trim(),
       });
       flash('success', 'Expense submitted for approval');
+      setModalOpen(false);
+      fetchExpenses();
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitMileage() {
+    const dist = Number(form.distance);
+    const rate = Number(form.ratePerUnit);
+    if (!Number.isFinite(dist) || dist <= 0) {
+      flash('error', 'Enter the distance travelled');
+      return;
+    }
+    if (!Number.isFinite(rate) || rate <= 0) {
+      flash('error', 'Enter a rate per ' + (form.unit === 'km' ? 'km' : 'mile'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const tax = Number(form.tax);
+      // Mirrors web AddExpense's mileage submission: category 'Mileage',
+      // a mileage payload, and a server-validated totalAmount.
+      await api.post('/expenses', {
+        claimType: 'mileage',
+        date: form.date,
+        currency: form.currency,
+        category: 'Mileage',
+        tax: Number.isFinite(tax) ? tax : 0,
+        totalAmount: mileageTotal(form),
+        tags: [],
+        notes: (form.description || '').trim(),
+        mileage: {
+          distance: dist,
+          unit: form.unit,
+          ratePerUnit: rate,
+          destinations: [{ address: '', latitude: null, longitude: null, order: 0 }],
+          routePoints: [],
+        },
+      });
+      flash('success', 'Mileage claim submitted for approval');
       setModalOpen(false);
       fetchExpenses();
     } catch (err) {
@@ -350,7 +461,7 @@ export default function EmployeeExpenses() {
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          New expense claim
+          New claim
         </button>
 
         <div className="ee-chips ee-anim">
@@ -373,7 +484,7 @@ export default function EmployeeExpenses() {
           <div className="ee-empty ee-anim">
             <p className="ee-empty-title">{filter !== 'all' ? 'No matches' : 'No expense claims yet'}</p>
             <p className="ee-empty-sub">
-              {filter !== 'all' ? 'Try a different filter.' : 'Tap “New expense claim” to submit your first one.'}
+              {filter !== 'all' ? 'Try a different filter.' : 'Tap “New claim” to submit your first one.'}
             </p>
           </div>
         ) : (
@@ -409,45 +520,159 @@ export default function EmployeeExpenses() {
         <div className="ee-overlay" onClick={() => !submitting && setModalOpen(false)}>
           <div className="ee-sheet" onClick={(ev) => ev.stopPropagation()}>
             <div className="ee-sheet-grip" />
-            <h2 className="ee-sheet-title">New expense claim</h2>
+            <h2 className="ee-sheet-title">New {form.claimType === 'mileage' ? 'mileage' : 'expense'} claim</h2>
             <form onSubmit={submitExpense}>
-              <div className="ee-row2">
-                <div className="ee-field">
-                  <label className="ee-label" htmlFor="ee-amount">Amount</label>
-                  <div className="ee-amount-wrap">
-                    <span className="ee-amount-cur">{form.currency === 'GBP' ? '£' : form.currency === 'USD' ? '$' : form.currency === 'EUR' ? '€' : ''}</span>
-                    <input
-                      id="ee-amount" className="ee-input" type="number" inputMode="decimal" min="0" step="0.01"
-                      placeholder="0.00" value={form.amount}
-                      onChange={(ev) => setForm((f) => ({ ...f, amount: ev.target.value }))}
-                    />
+              <div className="ee-toggle" role="group" aria-label="Claim type">
+                <button
+                  type="button"
+                  className={`ee-toggle-btn ${form.claimType === 'receipt' ? 'is-active' : ''}`}
+                  onClick={() => setForm((f) => ({ ...f, claimType: 'receipt' }))}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1z" /><path d="M8 7h8M8 11h8M8 15h5" />
+                  </svg>
+                  Receipt
+                </button>
+                <button
+                  type="button"
+                  className={`ee-toggle-btn ${form.claimType === 'mileage' ? 'is-active' : ''}`}
+                  onClick={() => setForm((f) => ({ ...f, claimType: 'mileage' }))}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 17H3v-5l2-5h11l3 5v5h-2" /><circle cx="7.5" cy="17" r="2" /><circle cx="16.5" cy="17" r="2" />
+                  </svg>
+                  Mileage
+                </button>
+              </div>
+
+              {form.claimType === 'receipt' ? (
+                <>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-amount">Amount</label>
+                      <div className="ee-amount-wrap">
+                        <span className="ee-amount-cur">{form.currency === 'GBP' ? '£' : form.currency === 'USD' ? '$' : form.currency === 'EUR' ? '€' : ''}</span>
+                        <input
+                          id="ee-amount" className="ee-input" type="number" inputMode="decimal" min="0" step="0.01"
+                          placeholder="0.00" value={form.amount}
+                          onChange={(ev) => setForm((f) => ({ ...f, amount: ev.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-currency">Currency</label>
+                      <select id="ee-currency" className="ee-select" value={form.currency} onChange={(ev) => setForm((f) => ({ ...f, currency: ev.target.value }))}>
+                        <option value="GBP">GBP £</option>
+                        <option value="USD">USD $</option>
+                        <option value="EUR">EUR €</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
-                <div className="ee-field">
-                  <label className="ee-label" htmlFor="ee-currency">Currency</label>
-                  <select id="ee-currency" className="ee-select" value={form.currency} onChange={(ev) => setForm((f) => ({ ...f, currency: ev.target.value }))}>
-                    <option value="GBP">GBP £</option>
-                    <option value="USD">USD $</option>
-                    <option value="EUR">EUR €</option>
-                  </select>
-                </div>
-              </div>
-              <div className="ee-row2">
-                <div className="ee-field">
-                  <label className="ee-label" htmlFor="ee-category">Category</label>
-                  <select id="ee-category" className="ee-select" value={form.category} onChange={(ev) => setForm((f) => ({ ...f, category: ev.target.value }))}>
-                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div className="ee-field">
-                  <label className="ee-label" htmlFor="ee-date">Date</label>
-                  <input id="ee-date" className="ee-input" type="date" value={form.date} max={todayYMD()} onChange={(ev) => setForm((f) => ({ ...f, date: ev.target.value }))} />
-                </div>
-              </div>
-              <div className="ee-field">
-                <label className="ee-label" htmlFor="ee-desc">Description</label>
-                <textarea id="ee-desc" className="ee-textarea" placeholder="What was this expense for?" value={form.description} onChange={(ev) => setForm((f) => ({ ...f, description: ev.target.value }))} />
-              </div>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-category">Category</label>
+                      <select id="ee-category" className="ee-select" value={form.category} onChange={(ev) => setForm((f) => ({ ...f, category: ev.target.value }))}>
+                        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-date">Date</label>
+                      <input id="ee-date" className="ee-input" type="date" value={form.date} max={todayYMD()} onChange={(ev) => setForm((f) => ({ ...f, date: ev.target.value }))} />
+                    </div>
+                  </div>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-supplier">Supplier</label>
+                      <input id="ee-supplier" className="ee-input" type="text" placeholder="Paid to?" value={form.supplier} onChange={(ev) => setForm((f) => ({ ...f, supplier: ev.target.value }))} />
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-tax-r">Tax</label>
+                      <div className="ee-amount-wrap">
+                        <span className="ee-amount-cur">{form.currency === 'GBP' ? '£' : form.currency === 'USD' ? '$' : form.currency === 'EUR' ? '€' : ''}</span>
+                        <input
+                          id="ee-tax-r" className="ee-input" type="number" inputMode="decimal" min="0" step="0.01"
+                          placeholder="0.00" value={form.tax}
+                          onChange={(ev) => setForm((f) => ({ ...f, tax: ev.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="ee-field">
+                    <label className="ee-label" htmlFor="ee-desc">Description</label>
+                    <textarea id="ee-desc" className="ee-textarea" placeholder="What was this expense for?" value={form.description} onChange={(ev) => setForm((f) => ({ ...f, description: ev.target.value }))} />
+                  </div>
+                  <div className="ee-total">
+                    <span className="ee-total-lab">Total</span>
+                    <span className="ee-total-val">{formatMoney(receiptTotal(form), form.currency)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-distance">Distance</label>
+                      <input
+                        id="ee-distance" className="ee-input" type="number" inputMode="decimal" min="0" step="0.1"
+                        placeholder="0" value={form.distance}
+                        onChange={(ev) => setForm((f) => ({ ...f, distance: ev.target.value }))}
+                      />
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-unit">Unit</label>
+                      <select id="ee-unit" className="ee-select" value={form.unit} onChange={(ev) => setForm((f) => ({ ...f, unit: ev.target.value }))}>
+                        <option value="miles">Miles</option>
+                        <option value="km">KM</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-rate">Rate / {form.unit === 'km' ? 'KM' : 'Mile'}</label>
+                      <div className="ee-amount-wrap">
+                        <span className="ee-amount-cur">{form.currency === 'GBP' ? '£' : form.currency === 'USD' ? '$' : form.currency === 'EUR' ? '€' : ''}</span>
+                        <input
+                          id="ee-rate" className="ee-input" type="number" inputMode="decimal" min="0" step="0.01"
+                          placeholder="0.45" value={form.ratePerUnit}
+                          onChange={(ev) => setForm((f) => ({ ...f, ratePerUnit: ev.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-currency-m">Currency</label>
+                      <select id="ee-currency-m" className="ee-select" value={form.currency} onChange={(ev) => setForm((f) => ({ ...f, currency: ev.target.value }))}>
+                        <option value="GBP">GBP £</option>
+                        <option value="USD">USD $</option>
+                        <option value="EUR">EUR €</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="ee-row2">
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-date-m">Date</label>
+                      <input id="ee-date-m" className="ee-input" type="date" value={form.date} max={todayYMD()} onChange={(ev) => setForm((f) => ({ ...f, date: ev.target.value }))} />
+                    </div>
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-tax">Tax</label>
+                      <div className="ee-amount-wrap">
+                        <span className="ee-amount-cur">{form.currency === 'GBP' ? '£' : form.currency === 'USD' ? '$' : form.currency === 'EUR' ? '€' : ''}</span>
+                        <input
+                          id="ee-tax" className="ee-input" type="number" inputMode="decimal" min="0" step="0.01"
+                          placeholder="0.00" value={form.tax}
+                          onChange={(ev) => setForm((f) => ({ ...f, tax: ev.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="ee-field">
+                    <label className="ee-label" htmlFor="ee-desc-m">Notes</label>
+                    <textarea id="ee-desc-m" className="ee-textarea" placeholder="Reason for the journey (optional)" value={form.description} onChange={(ev) => setForm((f) => ({ ...f, description: ev.target.value }))} />
+                  </div>
+                  <div className="ee-total">
+                    <span className="ee-total-lab">Total</span>
+                    <span className="ee-total-val">{formatMoney(mileageTotal(form), form.currency)}</span>
+                  </div>
+                </>
+              )}
               <div className="ee-actions">
                 <button type="button" className="ee-btn ee-btn-cancel" onClick={() => setModalOpen(false)} disabled={submitting}>Cancel</button>
                 <button type="submit" className="ee-btn ee-btn-submit" disabled={submitting}>

@@ -314,6 +314,47 @@ const styles = `
     border-left: 3px solid #c0756a;
     color: #7a3028;
   }
+
+  /* ── Reason modal ── */
+  @keyframes ap-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ap-sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .ap-overlay {
+    position: fixed; inset: 0;
+    background: rgba(31, 41, 38, 0.45); backdrop-filter: blur(2px);
+    z-index: 50; display: flex; align-items: flex-end;
+    animation: ap-fade 0.2s ease both;
+  }
+  .ap-sheet {
+    width: 100%; max-height: 90vh; overflow-y: auto;
+    background: #f6f8f4; border-radius: 22px 22px 0 0; padding: 1rem 1.1rem 1.5rem;
+    box-shadow: 0 -8px 30px rgba(47, 62, 70, 0.2);
+    animation: ap-sheetUp 0.3s cubic-bezier(0.22,1,0.36,1) both;
+  }
+  .ap-sheet-grip { width: 38px; height: 4px; border-radius: 999px; background: #cdd5cf; margin: 0 auto 0.85rem; }
+  .ap-sheet-title { font-family: 'Cormorant Garamond', serif; font-size: 1.45rem; font-weight: 400; color: #2f3e46; margin: 0 0 0.25rem; }
+  .ap-sheet-sub { font-size: 0.78rem; color: #7a8e84; margin: 0 0 0.85rem; }
+  .ap-field { margin-bottom: 0.85rem; }
+  .ap-field-label { display: block; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #7a8e84; margin-bottom: 0.35rem; }
+  .ap-textarea {
+    width: 100%; padding: 0.7rem 0.8rem; border: 1.5px solid #d4ddd6; border-radius: 12px;
+    font-family: 'DM Sans', sans-serif; font-size: 16px; color: #2f3e46; background: #fff; outline: none;
+    box-sizing: border-box; -webkit-appearance: none; appearance: none;
+    transition: border-color 0.18s, box-shadow 0.18s;
+    min-height: 90px; resize: vertical; line-height: 1.5;
+  }
+  .ap-textarea:focus { border-color: #52796f; box-shadow: 0 0 0 3px rgba(82,121,111,0.12); }
+  .ap-sheet-actions { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+  .ap-sheet-btn {
+    flex: 1; padding: 0.75rem; border-radius: 12px;
+    font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em;
+    border: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+    transition: transform 0.12s;
+  }
+  .ap-sheet-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .ap-sheet-btn:not(:disabled):active { transform: scale(0.98); }
+  .ap-sheet-btn-cancel { background: #fff; color: #7a8e84; border: 1.5px solid #d4ddd6; }
+  .ap-sheet-btn-confirm { background: linear-gradient(135deg, #8a3f36 0%, #b85c50 100%); color: #fbeae7; box-shadow: 0 4px 14px rgba(138,63,54,0.2); }
 `;
 
 function formatDate(iso) {
@@ -353,6 +394,9 @@ export default function ManagerApprovals() {
   const [error, setError] = useState(null);
   const [actingId, setActingId] = useState(null);
   const [banner, setBanner] = useState(null);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
   const [expFiltersOpen, setExpFiltersOpen] = useState(false);
   const [categoryFilters, setCategoryFilters] = useState([]);
   const [employeeFilters, setEmployeeFilters] = useState([]);
@@ -389,13 +433,16 @@ export default function ManagerApprovals() {
   }
 
   async function actOnLeave(req, approve) {
-    if (!window.confirm(approve ? 'Approve this leave request?' : 'Reject this leave request?')) return;
+    if (!approve) {
+      openReject('leave', req);
+      return;
+    }
+    if (!window.confirm('Approve this leave request?')) return;
     setActingId(req._id);
     try {
-      const path = approve ? `/leave/approve/${req._id}` : `/leave/reject/${req._id}`;
-      await api.patch(path, { adminComment: '' });
+      await api.patch(`/leave/approve/${req._id}`, { adminComment: '' });
       setLeaves((prev) => prev.filter((r) => r._id !== req._id));
-      flash('success', approve ? 'Leave approved' : 'Leave rejected');
+      flash('success', 'Leave approved');
     } catch (err) {
       flash('error', getErrorMessage(err));
     } finally {
@@ -404,17 +451,57 @@ export default function ManagerApprovals() {
   }
 
   async function actOnExpense(req, approve) {
-    if (!window.confirm(approve ? 'Approve this expense?' : 'Decline this expense?')) return;
+    if (!approve) {
+      openReject('expense', req);
+      return;
+    }
+    if (!window.confirm('Approve this expense?')) return;
     setActingId(req._id);
     try {
-      const path = approve ? `/expenses/${req._id}/approve` : `/expenses/${req._id}/decline`;
-      await api.post(path, { approvalNotes: '' });
+      await api.post(`/expenses/${req._id}/approve`, { approvalNotes: '' });
       setExpenses((prev) => prev.filter((r) => r._id !== req._id));
-      flash('success', approve ? 'Expense approved' : 'Expense declined');
+      flash('success', 'Expense approved');
     } catch (err) {
       flash('error', getErrorMessage(err));
     } finally {
       setActingId(null);
+    }
+  }
+
+  function openReject(kind, req) {
+    setRejectTarget({ kind, req });
+    setRejectReason('');
+  }
+
+  function closeReject() {
+    if (rejectSubmitting) return;
+    setRejectTarget(null);
+    setRejectReason('');
+  }
+
+  async function submitReject(e) {
+    e.preventDefault();
+    if (!rejectTarget) return;
+    const reason = rejectReason.trim();
+    if (!reason) return;
+    const { kind, req } = rejectTarget;
+    setRejectSubmitting(true);
+    try {
+      if (kind === 'leave') {
+        await api.patch(`/leave/reject/${req._id}`, { adminComment: reason });
+        setLeaves((prev) => prev.filter((r) => r._id !== req._id));
+        flash('success', 'Leave rejected');
+      } else {
+        await api.post(`/expenses/${req._id}/decline`, { approvalNotes: reason });
+        setExpenses((prev) => prev.filter((r) => r._id !== req._id));
+        flash('success', 'Expense declined');
+      }
+      setRejectTarget(null);
+      setRejectReason('');
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setRejectSubmitting(false);
     }
   }
 
@@ -664,6 +751,61 @@ export default function ManagerApprovals() {
           list.map((req) => <ExpenseCard key={req._id} req={req} acting={actingId === req._id} onAct={actOnExpense} />)
         )}
       </div>
+
+      {rejectTarget && (
+        <div className="ap-overlay" onClick={closeReject}>
+          <div className="ap-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="ap-sheet-grip" />
+            <h2 className="ap-sheet-title">
+              {rejectTarget.kind === 'leave' ? 'Reject leave request' : 'Decline expense'}
+            </h2>
+            <p className="ap-sheet-sub">
+              {fullName(
+                rejectTarget.kind === 'leave'
+                  ? leaveEmployee(rejectTarget.req)
+                  : expenseEmployee(rejectTarget.req),
+              )}
+            </p>
+            <form onSubmit={submitReject}>
+              <div className="ap-field">
+                <label className="ap-field-label" htmlFor="ap-reject-reason">
+                  {rejectTarget.kind === 'leave' ? 'Reason for rejection' : 'Reason for decline'}
+                </label>
+                <textarea
+                  id="ap-reject-reason"
+                  className="ap-textarea"
+                  placeholder={
+                    rejectTarget.kind === 'leave'
+                      ? 'Let the employee know why this leave is being rejected…'
+                      : 'Let the employee know why this expense is being declined…'
+                  }
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="ap-sheet-actions">
+                <button
+                  type="button"
+                  className="ap-sheet-btn ap-sheet-btn-cancel"
+                  onClick={closeReject}
+                  disabled={rejectSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="ap-sheet-btn ap-sheet-btn-confirm"
+                  disabled={rejectSubmitting || !rejectReason.trim()}
+                >
+                  {rejectSubmitting ? <span className="ap-mini-spin" /> : null}
+                  {rejectTarget.kind === 'leave' ? 'Reject' : 'Decline'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }

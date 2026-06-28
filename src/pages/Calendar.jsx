@@ -386,6 +386,14 @@ const styles = `
     margin-top: 0.6rem;
     display: flex; gap: 0.4rem;
   }
+  .cal-req-note {
+    margin-top: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    background: rgba(122, 142, 132, 0.1);
+    border-radius: 8px;
+    font-size: 0.72rem; color: #4d5e57;
+    text-align: center;
+  }
   .cal-req-btn {
     flex: 1;
     padding: 0.5rem 0.6rem;
@@ -610,6 +618,13 @@ function leaveCoversDay(leave, ymd) {
   return toYMD(new Date(leave.startDate)) <= ymd && ymd <= toYMD(new Date(leave.endDate));
 }
 
+// True once the leave has started (start date is today or earlier).
+// Employees may only cancel leave that hasn't begun yet.
+function leaveStarted(leave) {
+  if (!leave?.startDate) return false;
+  return startOfDay(new Date(leave.startDate)) <= startOfDay(new Date());
+}
+
 function shiftOnDay(shift, ymd) {
   if (!shift?.date) return false;
   return toYMD(new Date(shift.date)) === ymd;
@@ -753,6 +768,10 @@ export default function Calendar() {
   }, []);
 
   async function cancelLeave(req) {
+    if (leaveStarted(req)) {
+      flash('error', 'This leave has already started and can no longer be cancelled');
+      return;
+    }
     if (!window.confirm('Cancel this leave request?')) return;
     setActingId(req._id);
     try {
@@ -1153,17 +1172,21 @@ function ApprovedList({ items, loading, actingId, onCancel, onOpenForm }) {
             {req.reason}
           </div>
         )}
-        <div className="cal-req-actions">
-          <button
-            type="button"
-            className="cal-req-btn is-cancel"
-            onClick={() => onCancel(req)}
-            disabled={actingId === req._id}
-          >
-            {actingId === req._id ? <span className="cal-mini-spin" /> : null}
-            Cancel Leave
-          </button>
-        </div>
+        {leaveStarted(req) ? (
+          <div className="cal-req-note">This leave has started and can no longer be cancelled.</div>
+        ) : (
+          <div className="cal-req-actions">
+            <button
+              type="button"
+              className="cal-req-btn is-cancel"
+              onClick={() => onCancel(req)}
+              disabled={actingId === req._id}
+            >
+              {actingId === req._id ? <span className="cal-mini-spin" /> : null}
+              Cancel Leave
+            </button>
+          </div>
+        )}
       </div>
     );
   });
@@ -1198,7 +1221,7 @@ function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm }) {
       : status === 'rejected' ? 'Rejected'
       : status === 'cancelled' ? 'Cancelled'
       : 'Pending';
-    const cancellable = status === 'pending' || status === 'approved';
+    const cancellable = (status === 'pending' || status === 'approved') && !leaveStarted(req);
     return (
       <div key={req._id} className="cal-req-card cal-anim">
         <div className="cal-req-top">

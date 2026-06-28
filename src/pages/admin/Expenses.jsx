@@ -158,7 +158,8 @@ function expenseEmployee(e) {
 }
 
 function expenseAmount(e) {
-  const raw = e?.amount ?? e?.total ?? e?.value ?? 0;
+  // The backend stores the claim amount in `totalAmount` (see web AdminExpenses).
+  const raw = e?.totalAmount ?? e?.amount ?? e?.total ?? e?.value ?? 0;
   const n = Number(raw);
   return Number.isFinite(n) ? n : 0;
 }

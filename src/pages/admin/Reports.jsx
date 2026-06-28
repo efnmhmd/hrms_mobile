@@ -106,15 +106,30 @@ export default function Reports() {
   async function fetchSnapshot() {
     setLoading(true);
     try {
-      const [empRes, attRes] = await Promise.all([
+      const [empRes, statusRes] = await Promise.all([
         api.get('/employees?includeAdmins=true').catch(() => null),
-        api.get('/clock/attendance-status').catch(() => null),
+        api.get('/clock/status?includeAdmins=true').catch(() => null),
       ]);
       const employees =
         empRes?.data?.data || empRes?.data?.employees ||
         (Array.isArray(empRes?.data) ? empRes.data : []);
       const active = employees.filter((m) => m.isActive !== false && m.status !== 'Terminated').length;
-      const present = Number(attRes?.data?.data?.summary?.present ?? attRes?.data?.data?.summary?.clockedIn ?? 0);
+
+      // /clock/status returns { data: { employees, clockedIn, clockedOut, break } }.
+      // "Present" = anyone at work right now, i.e. clocked in or on a break.
+      const statusData = statusRes?.data?.data || statusRes?.data || {};
+      let present;
+      if (Array.isArray(statusData.clockedIn) || Array.isArray(statusData.break)) {
+        present = (statusData.clockedIn?.length || 0) + (statusData.break?.length || 0);
+      } else {
+        const statusList =
+          statusData.employees || statusData.allEmployees ||
+          (Array.isArray(statusData) ? statusData : []);
+        present = statusList.filter((s) => {
+          const st = String(s?.status || '').replace('_', '-').toLowerCase();
+          return st === 'clocked-in' || st === 'on-break';
+        }).length;
+      }
       setSnapshot({ headcount: employees.length, active, present, employees });
     } catch {
       setSnapshot({ headcount: 0, active: 0, present: 0, employees: [] });

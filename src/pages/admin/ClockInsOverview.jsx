@@ -287,6 +287,12 @@ const styles = `
     color: #354f52; font-weight: 600;
     white-space: nowrap;
   }
+  .co-break-tag {
+    display: inline-flex; align-items: center; gap: 3px;
+    color: #b78f3a; font-weight: 600;
+    white-space: nowrap;
+  }
+  .co-break-tag svg { flex-shrink: 0; }
   .co-idle {
     color: #9aa8a0;
   }
@@ -408,6 +414,16 @@ function workedMinutes(emp, now) {
   const start = timeToDate(emp?.clockIn);
   if (!start) return null;
   const end = timeToDate(emp?.clockOut) || now;
+  if (!end) return null;
+  let diff = Math.floor((end - start) / 60000);
+  if (diff < 0) diff += 24 * 60;
+  return diff;
+}
+
+function breakMinutes(emp, now) {
+  const start = timeToDate(emp?.breakIn);
+  if (!start) return null;
+  const end = timeToDate(emp?.breakOut) || now;
   if (!end) return null;
   let diff = Math.floor((end - start) / 60000);
   if (diff < 0) diff += 24 * 60;
@@ -730,6 +746,8 @@ export default function ClockInsOverview() {
               const worked = isLive || (status === 'clocked-out' && emp.clockOut)
                 ? workedMinutes(emp, now)
                 : null;
+              const breakStartT = timeOnly(emp.breakIn);
+              const breakMins = status === 'on-break' ? breakMinutes(emp, now) : null;
               const dept = emp.department || emp.team;
               const role = roleTag(emp);
               const empId = emp._id || emp.id;
@@ -765,6 +783,20 @@ export default function ClockInsOverview() {
                             <>
                               <span className="co-dot-sep">·</span>
                               <span className="co-duration">{formatDuration(worked)}</span>
+                            </>
+                          )}
+                          {status === 'on-break' && breakStartT && (
+                            <>
+                              <span className="co-dot-sep">·</span>
+                              <span className="co-break-tag">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                                  <rect x="14" y="5" width="4" height="14" rx="1" />
+                                </svg>
+                                {breakStartT}
+                                {breakMins != null ? ` · ${formatDuration(breakMins)}` : ''}
+                              </span>
                             </>
                           )}
                         </>

@@ -258,8 +258,9 @@ function netMinutes(entry) {
 
 function formatHours(mins) {
   if (mins == null) return '—';
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
+  const total = Math.round(mins);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
   if (h === 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;

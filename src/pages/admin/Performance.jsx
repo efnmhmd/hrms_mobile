@@ -126,6 +126,32 @@ function employeeOf(req) {
   return req?.employeeName || req?.employee?.name || req?.employee?.email || 'Employee';
 }
 
+// Adapt a performance "goal" (web manager feed) into the objective-request shape
+// this screen renders, so the fallback below produces the same UI.
+function goalToRequest(g) {
+  const u = g?.userId;
+  const employeeName =
+    g?.employeeName ||
+    (u && typeof u === 'object' ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() : '') ||
+    g?.employee?.name || '';
+  const raw = String(g?.status || '').toUpperCase();
+  let status = 'pending';
+  if (raw === 'ACHIEVED' || raw === 'COMPLETED') status = 'completed';
+  else if (raw === 'CANCELLED') status = 'cancelled';
+  // OVERDUE is derived from the deadline by statusOf(), so leave it as pending.
+  return {
+    _id: g?._id || g?.id,
+    employeeName,
+    employee: g?.employee,
+    message: g?.title || g?.description,
+    title: g?.title,
+    deadline: g?.endDate || g?.deadline,
+    status,
+    createdAt: g?.createdAt,
+    department: g?.department,
+  };
+}
+
 function initials(name) {
   const parts = String(name).trim().split(/\s+/);
   const a = parts[0]?.charAt(0) || '';
@@ -152,8 +178,17 @@ export default function Performance() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await api.get('/objective-requests');
-      const list = data?.data || (Array.isArray(data) ? data : []);
+      let list;
+      try {
+        const { data } = await api.get('/objective-requests');
+        list = data?.data || (Array.isArray(data) ? data : []);
+      } catch (primaryErr) {
+        // Some manager roles can't read the objective-requests feed; fall back to
+        // the performance goals feed (the web manager view) and adapt its shape.
+        const { data } = await api.get('/performance/goals');
+        const goals = data?.data || data?.goals || (Array.isArray(data) ? data : []);
+        list = (Array.isArray(goals) ? goals : []).map(goalToRequest);
+      }
       setRequests(Array.isArray(list) ? list : []);
     } catch (err) {
       setError(getErrorMessage(err));

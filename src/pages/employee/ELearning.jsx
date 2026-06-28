@@ -141,6 +141,11 @@ const styles = `
     width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
     cursor: pointer; -webkit-tap-highlight-color: transparent; flex-shrink: 0; }
   .elr-viewer-close:active { transform: scale(0.94); }
+  .elr-viewer-download { background: rgba(255,255,255,0.15); border: none; color: #f0f5f2;
+    width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; flex-shrink: 0; }
+  .elr-viewer-download:active { transform: scale(0.94); }
+  .elr-viewer-download:disabled { opacity: 0.5; cursor: not-allowed; }
   .elr-viewer-body { flex: 1; min-height: 0; position: relative; background: #525659; }
   .elr-viewer-frame { width: 100%; height: 100%; border: none; }
   .elr-viewer-center { position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -159,6 +164,21 @@ function getFileType(mimeType) {
   if (mimeType.includes('wordprocessingml')) return 'DOCX';
   if (mimeType.includes('msword')) return 'DOC';
   return 'FILE';
+}
+
+const MIME_EXT = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc',
+};
+
+function buildFileName(material) {
+  const base = (material?.name || material?.title || 'material').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'material';
+  if (/\.[a-z0-9]{2,5}$/i.test(base)) return base; // already has an extension
+  const ext = MIME_EXT[material?.mimeType] || '';
+  return ext ? `${base}.${ext}` : base;
 }
 
 function formatFileSize(bytes) {
@@ -183,6 +203,15 @@ function BookIcon({ size = 18 }) {
   );
 }
 
+function DownloadIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+    </svg>
+  );
+}
+
 function CheckIcon({ size = 13 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -198,6 +227,7 @@ export default function ELearning() {
   const [error, setError] = useState(null);
   const [banner, setBanner] = useState(null);
   const [completingId, setCompletingId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
   const [viewer, setViewer] = useState(null); // { material, url, loading, failed }
 
   function flash(kind, text) {
@@ -269,6 +299,33 @@ export default function ELearning() {
   function closeViewer() {
     if (viewer?.url) URL.revokeObjectURL(viewer.url);
     setViewer(null);
+  }
+
+  // Trigger a file download. Reuses the already-fetched blob URL when available,
+  // otherwise fetches the document fresh (e.g. when the in-app viewer failed).
+  async function downloadMaterial(material, existingUrl) {
+    setDownloadingId(material._id);
+    let url = existingUrl;
+    let createdHere = false;
+    try {
+      if (!url) {
+        const res = await api.get(`/elearning/view/${material._id}`, { responseType: 'blob' });
+        const blob = new Blob([res.data], { type: material.mimeType || 'application/octet-stream' });
+        url = URL.createObjectURL(blob);
+        createdHere = true;
+      }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = buildFileName(material);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      if (createdHere && url) setTimeout(() => URL.revokeObjectURL(url), 1500);
+      setDownloadingId(null);
+    }
   }
 
   return (
@@ -389,6 +446,15 @@ export default function ELearning() {
         <div className="elr-viewer">
           <div className="elr-viewer-bar">
             <span className="elr-viewer-title">{viewer.material?.name || viewer.material?.title || 'Material'}</span>
+            <button
+              type="button"
+              className="elr-viewer-download"
+              onClick={() => downloadMaterial(viewer.material, viewer.url)}
+              disabled={downloadingId === viewer.material?._id}
+              aria-label="Download material"
+            >
+              {downloadingId === viewer.material?._id ? <span className="elr-mini-spin" /> : <DownloadIcon size={18} />}
+            </button>
             <button type="button" className="elr-viewer-close" onClick={closeViewer} aria-label="Close viewer">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -404,7 +470,15 @@ export default function ELearning() {
               </div>
             ) : viewer.failed ? (
               <div className="elr-viewer-center">
-                <span>Couldn’t open this material.</span>
+                <span>Couldn’t preview this material on your device.</span>
+                <button
+                  type="button"
+                  className="elr-viewer-fallback-btn"
+                  onClick={() => downloadMaterial(viewer.material)}
+                  disabled={downloadingId === viewer.material?._id}
+                >
+                  {downloadingId === viewer.material?._id ? 'Downloading…' : 'Download to open'}
+                </button>
                 <button type="button" className="elr-viewer-fallback-btn" onClick={() => openViewer(viewer.material)}>
                   Try again
                 </button>
