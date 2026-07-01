@@ -488,7 +488,7 @@ export default function ManagerApprovals() {
     setRejectSubmitting(true);
     try {
       if (kind === 'leave') {
-        await api.patch(`/leave/reject/${req._id}`, { adminComment: reason });
+        await api.patch(`/leave/reject/${req._id}`, { rejectionReason: reason });
         setLeaves((prev) => prev.filter((r) => r._id !== req._id));
         flash('success', 'Leave rejected');
       } else {
