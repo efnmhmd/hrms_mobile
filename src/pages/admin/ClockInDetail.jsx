@@ -604,7 +604,14 @@ export default function ClockInDetail() {
 
   async function changeShiftStatus(newStatus, confirmText) {
     if (!employee) return;
-    const empId = employee._id || employee.id || id;
+    // /clock/admin/status expects the User _id. For regular staff, employee._id
+    // is the EmployeesHub id, so prefer employee.userId (the linked User ref);
+    // admins are already keyed by their User _id under employee._id.
+    const empId =
+      (employee.userId && (employee.userId._id || employee.userId)) ||
+      employee._id ||
+      employee.id ||
+      id;
     if (!empId) {
       flash('error', "Couldn't find employee ID");
       return;
