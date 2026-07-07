@@ -171,8 +171,11 @@ jobs:
       - name: Archive (xcodebuild)
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           # Signing is defined in the Xcode project (manual). We only inject the team here.
+          # The build number (CURRENT_PROJECT_VERSION) must be unique + increasing for every
+          # App Store Connect upload, so we tie it to the GitHub run number.
           xcodebuild archive \
             -workspace ios/App/App.xcworkspace \
             -scheme App \
@@ -180,7 +183,8 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$IOS_TEAM_ID"
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Export IPA (xcodebuild)
         run: |
@@ -196,6 +200,28 @@ jobs:
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
           retention-days: 14
+
+      # Push the build to App Store Connect (TestFlight / App Store). Only for the
+      # app-store export method — ad-hoc/development IPAs can't be uploaded there.
+      - name: Upload to App Store Connect
+        if: ${{ env.EXPORT_METHOD == 'app-store' }}
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          if [ -z "${API_KEY_PATH:-}" ] || [ ! -f "${API_KEY_PATH:-/nonexistent}" ]; then
+            echo "::error::App Store Connect API key not available. Set APPSTORE_API_KEY_ID, APPSTORE_API_ISSUER_ID and APPSTORE_API_PRIVATE_KEY_BASE64 secrets to enable upload."
+            exit 1
+          fi
+          IPA=$(ls "$RUNNER_TEMP"/export/*.ipa | head -n1)
+          echo "Uploading $IPA to App Store Connect (build ${{ github.run_number }})..."
+          # altool discovers the key at ~/.appstoreconnect/private_keys/AuthKey_<id>.p8
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          cp "$API_KEY_PATH" "$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          xcrun altool --upload-app --type ios --file "$IPA" \
+            --apiKey "$APPSTORE_API_KEY_ID" --apiIssuer "$APPSTORE_API_ISSUER_ID"
+          echo "Upload submitted. After Apple finishes processing (a few minutes), the build"
+          echo "appears in App Store Connect -> your app -> TestFlight / Distribution."
 
       - name: Clean up keychain
         if: ${{ always() }}
