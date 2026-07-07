@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
 
@@ -511,7 +512,7 @@ export default function Notifications() {
         )}
       </div>
 
-      {selected && (
+      {selected && createPortal(
         <div className="nt-overlay" onClick={() => setSelected(null)}>
           <div className="nt-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="nt-sheet-grip" />
@@ -531,7 +532,8 @@ export default function Notifications() {
               Done
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

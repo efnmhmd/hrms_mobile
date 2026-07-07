@@ -1,5 +1,6 @@
-import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { NavLink, useOutlet, useNavigate, useLocation } from 'react-router-dom';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { HeaderActionContext } from './headerAction';
 
 const tabs = [
   { to: '/', label: 'Home', Icon: HomeIcon, end: true },
@@ -19,6 +20,7 @@ const ROUTE_TITLES = {
   '/admin/teams':         'Manage Teams',
   '/admin/leave-balances': 'Leave Balances',
   '/admin/shifts':        'Shift Management',
+  '/admin/objectives':    'Objectives',
   '/manager/employees':   'Employees',
   '/manager/org-chart':   'Org Chart',
   '/manager/approvals':   'Approvals',
@@ -71,14 +73,67 @@ const styles = `
     line-height: 1;
   }
   .tg-topbar-logo {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
+    width: 68px;
+    height: 68px;
+    border-radius: 14px;
     object-fit: contain;
     flex-shrink: 0;
     background: #2f3e46;
-    padding: 2px;
+    padding: 5px;
   }
+  /* Right cluster: refresh button + brand logo */
+  .tg-topbar-right {
+    display: flex; align-items: center; gap: 8px;
+    flex-shrink: 0;
+  }
+  .tg-refresh-btn {
+    -webkit-tap-highlight-color: transparent;
+    background: none; border: none;
+    color: #354f52;
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.12s;
+  }
+  .tg-refresh-btn:active {
+    background: rgba(132, 169, 140, 0.18);
+    transform: scale(0.94);
+  }
+  .tg-refresh-btn.is-spinning svg { animation: tg-spin 0.6s linear; }
+  @keyframes tg-spin { to { transform: rotate(360deg); } }
+  /* Sign-out button, sits next to the refresh button */
+  .tg-signout-btn {
+    -webkit-tap-highlight-color: transparent;
+    background: none; border: none;
+    color: #c0392b;
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.12s;
+  }
+  .tg-signout-btn:active {
+    background: rgba(192, 117, 106, 0.16);
+    transform: scale(0.94);
+  }
+  /* Optional page-supplied action, sits just left of the refresh button */
+  .tg-action-btn {
+    -webkit-tap-highlight-color: transparent;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 7px 12px 7px 10px;
+    border: none; border-radius: 999px;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%);
+    color: #cad2c5;
+    font-size: 0.78rem; font-weight: 600; line-height: 1;
+    white-space: nowrap;
+    cursor: pointer; flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(53,79,82,0.22);
+    transition: transform 0.12s;
+  }
+  .tg-action-btn:active { transform: scale(0.95); }
   /* Left cluster: back chevron + page title */
   .tg-topbar-left {
     display: flex; align-items: center; gap: 6px;
@@ -172,11 +227,30 @@ const styles = `
   .tg-stage-shade.tg-dragging { transition: none; }
 `;
 
-export default function TabLayout() {
+export default function TabLayout({ onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const outlet = useOutlet();
   const stageRef = useRef(null);
   const shadeRef = useRef(null);
+
+  // Bumping this key remounts the current page's subtree, which re-runs its
+  // data-fetching effects — a universal "reload this page" for every route
+  // without each page having to wire up its own refresh handler.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // A page can register one action button here (via useHeaderAction) to have
+  // it rendered in the top bar next to the refresh button. Cleared by the page
+  // on unmount, so it never leaks to another route.
+  const [headerAction, setHeaderAction] = useState(null);
+
+  function handleRefresh() {
+    setRefreshKey((k) => k + 1);
+    // Brief spin purely for feedback; the remount itself is synchronous.
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 600);
+  }
 
   // Is the current URL one of the bottom-tab roots? If so, show the tab name
   // and no back button. Otherwise show a back chevron + page title.
@@ -322,13 +396,60 @@ export default function TabLayout() {
           )}
           <span className="tg-topbar-title tg-topbar-title-text">{pageTitle}</span>
         </div>
-        <img className="tg-topbar-logo" src="/tslnew.png" alt="Talent Shield" />
+        <div className="tg-topbar-right">
+          {headerAction && (
+            <button
+              type="button"
+              className="tg-action-btn"
+              onClick={headerAction.onClick}
+              aria-label={headerAction.ariaLabel || headerAction.label}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {headerAction.label}
+            </button>
+          )}
+          <button
+            type="button"
+            className={`tg-refresh-btn ${refreshing ? 'is-spinning' : ''}`}
+            onClick={handleRefresh}
+            aria-label="Refresh"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 2v6h-6" />
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+              <path d="M3 22v-6h6" />
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+            </svg>
+          </button>
+          {onLogout && (
+            <button
+              type="button"
+              className="tg-signout-btn"
+              onClick={onLogout}
+              aria-label="Sign out"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5" />
+                <path d="M21 12H9" />
+              </svg>
+            </button>
+          )}
+          <img className="tg-topbar-logo" src="/tslnew.png" alt="Talent Shield" />
+        </div>
       </header>
 
       <div className="tg-stage">
         <div ref={shadeRef} className="tg-stage-shade" />
         <main ref={stageRef} className="tg-stage-inner">
-          <Outlet />
+          <HeaderActionContext.Provider value={setHeaderAction}>
+            <Fragment key={refreshKey}>{outlet}</Fragment>
+          </HeaderActionContext.Provider>
         </main>
       </div>
 

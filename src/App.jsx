@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
 import AdminHome from './pages/admin/Home';
 import AdminEmployees from './pages/admin/Employees';
 import AdminOrgChart from './pages/admin/OrgChart';
@@ -10,6 +11,7 @@ import ClockInsOverview from './pages/admin/ClockInsOverview';
 import ClockInDetail from './pages/admin/ClockInDetail';
 import AdminManageTeams from './pages/admin/ManageTeams';
 import AdminLeaveBalances from './pages/admin/LeaveBalances';
+import AdminPendingLeaves from './pages/admin/PendingLeaves';
 import AdminExpenses from './pages/admin/Expenses';
 import AdminPerformance from './pages/admin/Performance';
 import AdminDocuments from './pages/admin/Documents';
@@ -110,6 +112,7 @@ export default function App() {
   if (!authed) {
     return (
       <Routes>
+        <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="*" element={<Login onLogin={handleLogin} />} />
       </Routes>
     );
@@ -119,7 +122,7 @@ export default function App() {
 
   return (
     <Routes>
-      <Route element={<TabLayout />}>
+      <Route element={<TabLayout onLogout={handleLogout} />}>
         <Route path="/" element={<HomeForGroup />} />
         <Route path="/clock" element={<Clock />} />
         <Route path="/shifts" element={<Shifts />} />
@@ -140,9 +143,11 @@ export default function App() {
         <Route path="/admin/clock-ins/:id" element={<ClockInDetail />} />
         <Route path="/admin/calendar" element={<Calendar />} />
         <Route path="/admin/teams" element={<AdminManageTeams />} />
-        <Route path="/admin/shifts" element={<ManagerShiftManagement />} />
+        <Route path="/admin/shifts" element={<ManagerShiftManagement scope="org" />} />
         <Route path="/admin/leave-balances" element={<AdminLeaveBalances />} />
-        <Route path="/admin/expenses" element={<AdminExpenses />} />
+        <Route path="/admin/pending-leaves" element={<AdminPendingLeaves />} />
+        <Route path="/admin/expenses" element={<AdminExpenses scope="org" />} />
+        <Route path="/admin/objectives" element={<ManagerObjectives scope="org" />} />
         <Route path="/admin/performance" element={<AdminPerformance />} />
         <Route path="/admin/documents" element={<AdminDocuments />} />
         <Route path="/admin/elearning" element={<AdminELearning />} />

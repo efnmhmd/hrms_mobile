@@ -5,7 +5,7 @@ import { getErrorMessage } from '../../utils/errorHandler';
 
 // Manager view of annual-leave balances across the reporting team.
 //   GET /manager/team/members?includeIndirect=true → { data: [...] }
-//   GET /leave/balances/current/:userId            → { data: { entitlementDays, carryOverDays, usedDays, pendingDays?, year? } }
+//   GET /leave/balances/current/:userId            → { data: { entitlementDays, carryOverDays, daysUsed, usedDays, totalTaken, pendingDays, totalDays, remainingDays } }
 // Remaining = entitlement + carry-over − used (mirrors the employee LeaveBalance
 // screen and web LeaveBalanceCards). Balances are fetched per member in
 // parallel; a 404 (or any failure) for one member degrades to "not set up"
@@ -94,11 +94,11 @@ const styles = `
     display: flex; align-items: center; justify-content: center; font-size: 0.78rem; font-weight: 700;
     background: linear-gradient(135deg, rgba(132, 169, 140, 0.28), rgba(82, 121, 111, 0.18)); color: #354f52;
   }
-  .tlb-body { min-width: 0; flex: 1; }
-  .tlb-name { font-size: 0.88rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tlb-sub { margin-top: 1px; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tlb-bar { margin-top: 0.5rem; height: 6px; border-radius: 999px; background: #eef2ef; overflow: hidden; }
-  .tlb-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #52796f, #84a98c); }
+  .tlb-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+  .tlb-name { display: block; max-width: 100%; font-size: 0.88rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tlb-sub { display: block; max-width: 100%; margin-top: 1px; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tlb-bar { display: block; margin-top: 0.5rem; height: 6px; border-radius: 999px; background: #eef2ef; overflow: hidden; }
+  .tlb-bar-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #52796f, #84a98c); }
   .tlb-bar-fill.is-low { background: linear-gradient(90deg, #c0756a, #d89a8f); }
   .tlb-bar-fill.is-mid { background: linear-gradient(90deg, #c49c4a, #e0c074); }
   .tlb-barmeta { margin-top: 0.35rem; font-size: 0.65rem; color: #7a8e84; display: flex; gap: 0.5rem; }
@@ -153,14 +153,21 @@ function fullName(m) {
 }
 
 // Turn a raw balance payload into the derived figures the card needs.
+// "Used" prefers the server's canonical daysUsed (= ALL approved leave taken)
+// over the raw stored usedDays (annual-only, often stale) — mirrors the web
+// LeaveBalanceSummary and the My Leave screen.
 function deriveBalance(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const entitlement = num(raw.entitlementDays ?? raw.totalDays);
   const carryOver = num(raw.carryOverDays);
-  const used = num(raw.usedDays ?? raw.daysUsed);
+  const used = raw.daysUsed != null
+    ? num(raw.daysUsed)
+    : raw.totalTaken != null
+      ? num(raw.totalTaken)
+      : num(raw.usedDays);
   const pending = num(raw.pendingDays);
-  const total = entitlement + carryOver;
-  const remaining = Math.max(0, total - used);
+  const total = raw.totalDays != null ? num(raw.totalDays) : entitlement + carryOver;
+  const remaining = raw.remainingDays != null ? num(raw.remainingDays) : Math.max(0, total - used);
   return { entitlement, carryOver, used, pending, total, remaining };
 }
 

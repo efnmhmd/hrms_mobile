@@ -14,19 +14,25 @@ run page (bottom, "Artifacts" → `hrms-ios-ipa`).
 You need an **Apple Developer Program** membership ($99/yr). From it you'll collect 5 things
 and store them as **GitHub repository Secrets**. None of these are ever committed to the repo.
 
-| GitHub Secret name                | What it is                                            |
-| --------------------------------- | ----------------------------------------------------- |
-| `IOS_DIST_CERT_P12_BASE64`        | Your **Apple Distribution certificate** (.p12) → base64 |
-| `IOS_DIST_CERT_PASSWORD`          | The password you set when exporting the .p12          |
-| `IOS_TEAM_ID`                     | Your 10-character Apple Developer **Team ID**         |
-| `APPSTORE_API_KEY_ID`             | App Store Connect API **Key ID**                      |
-| `APPSTORE_API_ISSUER_ID`         | App Store Connect API **Issuer ID**                   |
-| `APPSTORE_API_PRIVATE_KEY_BASE64`  | App Store Connect API key `.p8` file → base64          |
-| `IOS_KEYCHAIN_PASSWORD`           | Any random string you make up (temp keychain password)|
+The build uses **manual code signing** (deterministic, the correct choice for CI). You supply
+the distribution certificate **and** a matching provisioning profile explicitly.
 
-> Provisioning profiles are **not** stored manually — the workflow uses
-> `-allowProvisioningUpdates` with your App Store Connect API key, so Xcode creates/downloads
-> the right provisioning profile during the build.
+| GitHub Secret name                 | Required? | What it is                                            |
+| ---------------------------------- | --------- | ----------------------------------------------------- |
+| `IOS_DIST_CERT_P12_BASE64`         | **Yes**   | Your **Apple Distribution certificate** (.p12) → base64 |
+| `IOS_DIST_CERT_PASSWORD`           | **Yes**   | The password you set when exporting the .p12          |
+| `IOS_PROVISIONING_PROFILE_BASE64`  | **Yes**   | Your **distribution provisioning profile** (.mobileprovision) → base64 |
+| `IOS_TEAM_ID`                      | **Yes**   | Your 10-character Apple Developer **Team ID**         |
+| `IOS_KEYCHAIN_PASSWORD`            | **Yes**   | Any random string you make up (temp keychain password)|
+| `APPSTORE_API_KEY_ID`              | Optional  | App Store Connect API **Key ID**                      |
+| `APPSTORE_API_ISSUER_ID`          | Optional  | App Store Connect API **Issuer ID**                   |
+| `APPSTORE_API_PRIVATE_KEY_BASE64`  | Optional  | App Store Connect API key `.p8` file → base64          |
+
+> **Manual signing:** the workflow installs the profile from `IOS_PROVISIONING_PROFILE_BASE64`
+> and reads its name automatically — nothing is hardcoded. The provisioning profile **must
+> match the export method**: an *App Store* profile for the default `app-store` method, an
+> *Ad Hoc* profile for `ad-hoc`, etc. The `APPSTORE_API_*` secrets are **no longer used for
+> signing** — keep them only if you later add an App Store / TestFlight upload step.
 
 ---
 
@@ -93,6 +99,27 @@ You need an **Apple Distribution** certificate exported as a `.p12` (certificate
   ```
 Paste the resulting text as the secret value.
 
+## Step 3b — Provisioning profile → `IOS_PROVISIONING_PROFILE_BASE64`
+
+Because we sign **manually**, you must supply the provisioning profile yourself. It must be tied
+to the App ID `com.talentshield.hrms`, your Distribution certificate (Step 3), and the export
+method you build (default = **App Store**).
+
+1. Make sure the App ID exists: <https://developer.apple.com/account/resources/identifiers/list>
+   → **+** → **App IDs** → **App** → Bundle ID `com.talentshield.hrms` (explicit).
+2. Create the profile: <https://developer.apple.com/account/resources/profiles/list> → **+**
+   - For the default build choose **App Store Connect** (distribution).
+     (Choose **Ad Hoc** or **iOS App Development** instead if you build those export methods.)
+   - App ID: `com.talentshield.hrms`
+   - Certificate: the **Apple Distribution** cert from Step 3.
+   - Name it something memorable, then **Download** the `.mobileprovision`.
+3. Convert it to base64 and store it as `IOS_PROVISIONING_PROFILE_BASE64`:
+   - **macOS / Linux:** `base64 -w0 HRMS_AppStore.mobileprovision` (macOS: `base64 -i HRMS_AppStore.mobileprovision | pbcopy`)
+   - **Windows (PowerShell):** `[Convert]::ToBase64String([IO.File]::ReadAllBytes("HRMS_AppStore.mobileprovision")) | Set-Clipboard`
+
+> The workflow reads the profile's **name** from the file at build time, so you never need to
+> paste the name anywhere. Just re-generate this secret whenever the profile is renewed/replaced.
+
 ## Step 4 — Keychain password → `IOS_KEYCHAIN_PASSWORD`
 
 Just invent any random string (e.g. from a password manager). It's only used to lock the
@@ -146,7 +173,16 @@ Devices window.
   `ios/App/App.xcodeproj/xcshareddata/xcschemes/`.
 - **`No signing certificate "iOS Distribution" found`**
   The `.p12` is wrong/empty, or it's a *Development* cert. Re-export an **Apple Distribution** cert.
-- **`No profiles for 'com.talentshield.hrms' were found`**
-  Make sure the App ID `com.talentshield.hrms` exists in
-  <https://developer.apple.com/account/resources/identifiers/list> and your API key role is
-  **App Manager**.
+- **`No profiles for 'com.talentshield.hrms' were found`** /
+  **`Revoke certificate: ... Apple Development signing certificate ...`**
+  These come from **automatic** signing trying to manage certs/profiles on the CI machine.
+  This workflow uses **manual** signing, so make sure `IOS_PROVISIONING_PROFILE_BASE64` is set
+  to a valid distribution profile for `com.talentshield.hrms` (Step 3b) that **matches the
+  export method**, and that its certificate matches `IOS_DIST_CERT_P12_BASE64`.
+- **`No signing certificate "Apple Distribution" found`**
+  Your `.p12` is a legacy *iPhone Distribution* cert. Either re-export an **Apple Distribution**
+  cert, or change `CODE_SIGN_IDENTITY` / `signingCertificate` in the workflow to
+  `iPhone Distribution`.
+- **`... doesn't match the provisioning profile ... (method mismatch)`**
+  The installed profile type must match `export_method` — App Store profile for `app-store`,
+  Ad Hoc profile for `ad-hoc`, Development profile for `development`.

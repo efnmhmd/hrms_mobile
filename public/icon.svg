@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Talent Shield HRMS">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#52796f"/>
+      <stop offset="1" stop-color="#2f3e46"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <path d="M256 96 L368 136 V248 C368 330 314 386 256 416 C198 386 144 330 144 248 V136 Z"
+        fill="#ffffff" fill-opacity="0.12" stroke="#cad2c5" stroke-width="8" stroke-linejoin="round"/>
+  <text x="256" y="296" text-anchor="middle" font-family="Arial, Helvetica, sans-serif"
+        font-size="150" font-weight="700" fill="#ffffff">TS</text>
+</svg>

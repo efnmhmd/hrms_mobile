@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
 
 // Admin view of annual-leave balances across the whole organisation, with
 // inline editing. Mirrors web AnnualLeaveBalance.js:
-//   GET /leave/balances?current=true&includeAll=true → { data: [{ _id, user:{...}, entitlementDays, carryOverDays, usedDays, hasBalance }] }
+//   GET /leave/balances?current=true&includeAll=true → { data: [{ _id, user:{...}, entitlementDays, carryOverDays, daysUsed, usedDays, totalTaken, pendingDays, totalDays, remainingDays, hasBalance }] }
 //   PUT /leave/admin/balance/:userId                 → { entitlementDays, carryOverDays, reason } (reason required)
 // Remaining = entitlement + carry-over − used. One bulk call (each row carries
 // its embedded user), unlike the manager screen's per-member fetch.
@@ -94,11 +95,11 @@ const styles = `
     display: flex; align-items: center; justify-content: center; font-size: 0.78rem; font-weight: 700;
     background: linear-gradient(135deg, rgba(132, 169, 140, 0.28), rgba(82, 121, 111, 0.18)); color: #354f52;
   }
-  .alb-body { min-width: 0; flex: 1; }
-  .alb-name { font-size: 0.88rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .alb-sub { margin-top: 1px; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .alb-bar { margin-top: 0.5rem; height: 6px; border-radius: 999px; background: #eef2ef; overflow: hidden; }
-  .alb-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #52796f, #84a98c); }
+  .alb-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+  .alb-name { display: block; max-width: 100%; font-size: 0.88rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alb-sub { display: block; max-width: 100%; margin-top: 1px; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alb-bar { display: block; margin-top: 0.5rem; height: 6px; border-radius: 999px; background: #eef2ef; overflow: hidden; }
+  .alb-bar-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #52796f, #84a98c); }
   .alb-bar-fill.is-low { background: linear-gradient(90deg, #c0756a, #d89a8f); }
   .alb-bar-fill.is-mid { background: linear-gradient(90deg, #c49c4a, #e0c074); }
   .alb-barmeta { margin-top: 0.35rem; font-size: 0.65rem; color: #7a8e84; display: flex; gap: 0.5rem; }
@@ -106,9 +107,9 @@ const styles = `
   .alb-notset { font-size: 0.68rem; color: #b08a5a; margin-top: 0.4rem; font-style: italic; }
 
   .alb-right { flex-shrink: 0; text-align: right; display: flex; align-items: center; gap: 0.5rem; }
-  .alb-rem { text-align: right; }
-  .alb-rem-num { font-family: 'Cormorant Garamond', serif; font-size: 1.55rem; line-height: 1; font-weight: 500; color: #2f3e46; font-variant-numeric: tabular-nums; }
-  .alb-rem-lab { font-size: 0.52rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #84a98c; margin-top: 2px; }
+  .alb-rem { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+  .alb-rem-num { display: block; font-family: 'Cormorant Garamond', serif; font-size: 1.55rem; line-height: 1; font-weight: 500; color: #2f3e46; font-variant-numeric: tabular-nums; }
+  .alb-rem-lab { display: block; font-size: 0.52rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #84a98c; margin-top: 2px; }
   .alb-rem-num.is-low { color: #b85c50; }
   .alb-rem-dash { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; color: #b8c4bc; }
   .alb-edit-glyph { color: #b8c4bc; flex-shrink: 0; }
@@ -227,10 +228,16 @@ function toRow(b) {
   const name = `${u.firstName || ''} ${u.lastName || ''}`.trim() || 'Unknown';
   const entitlement = num(b.entitlementDays);
   const carryOver = num(b.carryOverDays);
-  const used = num(b.usedDays ?? b.daysUsed);
+  // Prefer the server's canonical daysUsed (= ALL approved leave taken) over the
+  // raw stored usedDays (annual-only, often stale) — mirrors the web app.
+  const used = b.daysUsed != null
+    ? num(b.daysUsed)
+    : b.totalTaken != null
+      ? num(b.totalTaken)
+      : num(b.usedDays);
   const pending = num(b.pendingDays);
-  const total = entitlement + carryOver;
-  const remaining = Math.max(0, total - used);
+  const total = b.totalDays != null ? num(b.totalDays) : entitlement + carryOver;
+  const remaining = b.remainingDays != null ? num(b.remainingDays) : Math.max(0, total - used);
   const configured = b.hasBalance !== false && !b.needsInitialization;
   return {
     balanceId: b._id,
@@ -512,7 +519,7 @@ export default function AdminLeaveBalances() {
 
       {banner && <div className={`alb-banner is-${banner.kind}`}>{banner.text}</div>}
 
-      {editing && (
+      {editing && createPortal((
         <div className="alb-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeEdit(); }}>
           <div className="alb-sheet">
             <div className="alb-sheet-head">
@@ -587,7 +594,7 @@ export default function AdminLeaveBalances() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </>
   );
 }

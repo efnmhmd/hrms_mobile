@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../utils/api';
-import { soon } from './DashboardShell';
 
 // Six stats mirror the web admin Dashboard (ComplianceDashboard.js:678-689):
 // employees · active · clocked-in · absent · pending leaves · pending expenses.
@@ -188,7 +187,7 @@ export default function AdminStats() {
     { key: 'active',     label: 'Active',     icon: <CheckIcon />, value: data?.active,     to: '/admin/employees', accent: true },
     { key: 'clocked-in', label: 'Clocked In', icon: <ClockIcon />, value: data?.clockedIn,  to: '/admin/time-history', accent: true },
     { key: 'absent',     label: 'Absent',     icon: <AlertIcon />, value: data?.absent,     to: '/admin/time-history', warn: true },
-    { key: 'leaves',     label: 'Leaves',     icon: <LeaveIcon />, value: data?.leaves,     to: soon('Pending Leaves') },
+    { key: 'leaves',     label: 'Leaves',     icon: <LeaveIcon />, value: data?.leaves,     to: '/admin/pending-leaves', warn: (data?.leaves ?? 0) > 0 },
     { key: 'expenses',   label: 'Expenses',   icon: <ExpenseIcon />, value: data?.expenses, to: '/admin/expenses' },
   ]), [data]);
 

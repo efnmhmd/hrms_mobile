@@ -17,7 +17,7 @@ const sections = [
   {
     title: 'WORKFORCE',
     items: [
-      { key: 'calendar',     label: 'Calendar',       icon: 'calendar', to: '/admin/calendar' },
+      { key: 'calendar',     label: 'Leaves',         icon: 'calendar', to: '/admin/calendar' },
       { key: 'shifts',       label: 'Shifts',         icon: 'shifts',   to: '/admin/shifts' },
       { key: 'clock',        label: 'Clock In/Out',   icon: 'clock',    to: '/clock' },
       { key: 'clock-ins',    label: 'Clock-ins',      icon: 'clock',    to: '/admin/clock-ins' },
@@ -27,7 +27,7 @@ const sections = [
   {
     title: 'REPORTING',
     items: [
-      { key: 'performance', label: 'Performance', icon: 'performance', to: '/admin/performance' },
+      { key: 'objectives',  label: 'Performance', icon: 'performance', to: '/admin/objectives' },
       { key: 'documents',   label: 'Documents',   icon: 'documents',   to: '/admin/documents' },
       { key: 'elearning',   label: 'E-Learning',  icon: 'elearning',   to: '/admin/elearning' },
       { key: 'expenses',    label: 'Expenses',    icon: 'expenses',    to: '/admin/expenses' },

@@ -29,7 +29,7 @@ const sections = [
   {
     title: 'WORKFORCE',
     items: [
-      { key: 'calendar',     label: 'Calendar',     icon: 'calendar', to: '/manager/calendar' },
+      { key: 'calendar',     label: 'Leaves',       icon: 'calendar', to: '/manager/calendar' },
       { key: 'shifts',       label: 'Shifts',       icon: 'shifts',   to: '/manager/shifts' },
       { key: 'clock',        label: 'Clock In/Out', icon: 'clock',    to: '/clock' },
       { key: 'clock-ins',    label: 'Clock-ins',    icon: 'clock',    to: '/manager/clock-ins' },

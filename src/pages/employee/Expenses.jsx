@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
 
@@ -11,6 +12,13 @@ import { getErrorMessage } from '../../utils/errorHandler';
 const LIST_ENDPOINTS = ['/expenses', '/expenses/my-requests', '/expenses/my'];
 
 const CATEGORIES = ['Travel', 'Meals', 'Accommodation', 'Office Supplies', 'Software', 'Training', 'Other'];
+
+// Receipt/document upload — mirror the backend multer limits (expenseRoutes.js):
+// a single file, JPEG/PNG/GIF/PDF only, 10MB max. Validate client-side so an
+// unsupported pick (e.g. an iOS HEIC photo) fails with a friendly message
+// instead of the raw server "Invalid file type" error.
+const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'];
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 const styles = `
   @keyframes ee-fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -52,16 +60,16 @@ const styles = `
   .ee-sum.is-rejected .ee-sum-val { color: #b85c50; }
   .ee-sum-sub { font-size: 0.58rem; color: #9aa8a0; margin-top: 2px; }
 
-  /* ── New claim button ── */
-  .ee-new {
-    display: flex; align-items: center; justify-content: center; gap: 0.4rem; width: 100%;
-    margin-bottom: 0.85rem; padding: 0.7rem; border-radius: 13px; border: none;
+  /* ── Header new-claim button ── */
+  .ee-header-add {
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.3rem;
+    height: 36px; padding: 0 0.85rem; border-radius: 999px; border: none;
     background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #f0f5f2;
-    font-family: 'DM Sans', sans-serif; font-size: 0.84rem; font-weight: 600; letter-spacing: 0.02em;
-    cursor: pointer; -webkit-tap-highlight-color: transparent; box-shadow: 0 4px 14px rgba(53,79,82,0.2);
+    font-family: 'DM Sans', sans-serif; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; box-shadow: 0 4px 12px rgba(53,79,82,0.22);
     transition: transform 0.12s;
   }
-  .ee-new:active { transform: scale(0.98); }
+  .ee-header-add:active { transform: scale(0.96); }
 
   /* ── Chips ── */
   .ee-chips { display: flex; gap: 0.4rem; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 0.85rem; padding-bottom: 4px; }
@@ -153,6 +161,36 @@ const styles = `
   .ee-total { margin: 0.2rem 0 0.85rem; padding: 0.7rem 0.85rem; border-radius: 12px; background: linear-gradient(135deg, #f0f5f2, #eaf2ec); display: flex; align-items: baseline; justify-content: space-between; }
   .ee-total-lab { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #7a8e84; }
   .ee-total-val { font-size: 1.2rem; font-weight: 700; color: #2f3e46; font-variant-numeric: tabular-nums; }
+
+  /* ── Receipt / document upload ── */
+  .ee-optional { font-weight: 500; letter-spacing: 0; text-transform: none; color: #9aa8a0; }
+  .ee-upload {
+    display: flex; align-items: center; gap: 0.6rem; width: 100%; box-sizing: border-box;
+    padding: 0.85rem 0.9rem; border: 1.5px dashed #b9c8bd; border-radius: 12px;
+    background: rgba(132, 169, 140, 0.06); color: #52796f; cursor: pointer;
+    -webkit-tap-highlight-color: transparent; transition: border-color 0.18s, background 0.18s;
+  }
+  .ee-upload:active { border-color: #52796f; background: rgba(132, 169, 140, 0.12); }
+  .ee-upload svg { flex-shrink: 0; }
+  .ee-upload-text { font-size: 0.8rem; font-weight: 600; line-height: 1.25; }
+  .ee-upload-text small { display: block; font-size: 0.66rem; font-weight: 500; color: #84a98c; margin-top: 1px; }
+  .ee-file {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.7rem;
+    border: 1.5px solid #d4ddd6; border-radius: 12px; background: #fff;
+  }
+  .ee-file-icon {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    background: rgba(82, 121, 111, 0.12); color: #52796f;
+  }
+  .ee-file-meta { min-width: 0; flex: 1; }
+  .ee-file-name { font-size: 0.78rem; font-weight: 600; color: #2f3e46; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ee-file-size { font-size: 0.66rem; color: #9aa8a0; margin-top: 1px; }
+  .ee-file-remove {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px; border: none; cursor: pointer;
+    background: rgba(192, 117, 106, 0.12); color: #b85c50; display: flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ee-file-remove:active { transform: scale(0.92); }
 `;
 
 const FILTERS = [
@@ -227,6 +265,7 @@ export default function EmployeeExpenses() {
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState(null);
+  const [receiptFile, setReceiptFile] = useState(null);
 
   async function fetchExpenses() {
     setLoading(true);
@@ -266,11 +305,47 @@ export default function EmployeeExpenses() {
   function openModal() {
     setForm({
       claimType: 'receipt',
-      amount: '', currency: 'GBP', category: 'Travel', date: todayYMD(), supplier: '', description: '',
+      amount: '', currency: 'GBP', category: 'Travel', customCategory: '', date: todayYMD(), supplier: '', description: '',
       // Mileage-specific (mirrors web AddExpense): distance × ratePerUnit + tax
       distance: '', unit: 'miles', ratePerUnit: '0.45', tax: '',
     });
+    setReceiptFile(null);
     setModalOpen(true);
+  }
+
+  function onPickFile(ev) {
+    const file = ev.target.files?.[0];
+    // Reset the input value so re-picking the same file after removal still fires onChange.
+    ev.target.value = '';
+    if (!file) return;
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      flash('error', 'Attach a JPEG, PNG, GIF or PDF file');
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      flash('error', 'File must be 10MB or smaller');
+      return;
+    }
+    setReceiptFile(file);
+  }
+
+  // After a claim is created, attach the picked document (if any). Two-step flow
+  // mirrors the web AddExpense: POST /expenses returns the new claim, then the
+  // file is uploaded to POST /expenses/:id/attachments as multipart/form-data.
+  // Returns true unless a file was picked but the upload failed.
+  async function attachReceiptIfAny(created) {
+    if (!receiptFile) return true;
+    const newId = created?._id || created?.expense?._id || created?.id;
+    if (!newId) return true; // nothing to attach to — don't block the success path
+    const fd = new FormData();
+    fd.append('file', receiptFile);
+    try {
+      // Let the browser set the multipart Content-Type (with boundary) itself.
+      await api.post(`/expenses/${newId}/attachments`, fd);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Total for the mileage claim type — keep in sync with the web calculation.
@@ -303,6 +378,12 @@ export default function EmployeeExpenses() {
       flash('error', 'Pick a category');
       return;
     }
+    // When "Other" is picked, the typed value becomes the category.
+    const category = form.category === 'Other' ? (form.customCategory || '').trim() : form.category;
+    if (!category) {
+      flash('error', 'Enter a category');
+      return;
+    }
     if ((form.supplier || '').trim().length < 2) {
       flash('error', 'Enter a supplier / merchant');
       return;
@@ -314,11 +395,11 @@ export default function EmployeeExpenses() {
       // totalAmount = receiptValue + tax (mirrors web's calculateReceiptTotal).
       const tax = Number(form.tax);
       const taxVal = Number.isFinite(tax) && tax > 0 ? tax : 0;
-      await api.post('/expenses', {
+      const { data } = await api.post('/expenses', {
         claimType: 'receipt',
         date: form.date,
         currency: form.currency,
-        category: form.category,
+        category,
         tax: taxVal,
         totalAmount: amt + taxVal,
         receiptValue: amt,
@@ -326,7 +407,10 @@ export default function EmployeeExpenses() {
         tags: [],
         notes: form.description.trim(),
       });
-      flash('success', 'Expense submitted for approval');
+      const attached = await attachReceiptIfAny(data);
+      flash(attached ? 'success' : 'error', attached
+        ? 'Expense submitted for approval'
+        : 'Claim saved, but the document failed to attach — add it later.');
       setModalOpen(false);
       fetchExpenses();
     } catch (err) {
@@ -352,7 +436,7 @@ export default function EmployeeExpenses() {
       const tax = Number(form.tax);
       // Mirrors web AddExpense's mileage submission: category 'Mileage',
       // a mileage payload, and a server-validated totalAmount.
-      await api.post('/expenses', {
+      const { data } = await api.post('/expenses', {
         claimType: 'mileage',
         date: form.date,
         currency: form.currency,
@@ -369,7 +453,10 @@ export default function EmployeeExpenses() {
           routePoints: [],
         },
       });
-      flash('success', 'Mileage claim submitted for approval');
+      const attached = await attachReceiptIfAny(data);
+      flash(attached ? 'success' : 'error', attached
+        ? 'Mileage claim submitted for approval'
+        : 'Claim saved, but the document failed to attach — add it later.');
       setModalOpen(false);
       fetchExpenses();
     } catch (err) {
@@ -420,6 +507,13 @@ export default function EmployeeExpenses() {
               {!loading && !error && <span className="ee-count"> · {filtered.length}</span>}
             </h1>
           </div>
+          <button type="button" className="ee-header-add" onClick={openModal} aria-label="New claim">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            New
+          </button>
           <button
             type="button"
             className={`ee-refresh${loading ? ' is-busy' : ''}`}
@@ -456,13 +550,6 @@ export default function EmployeeExpenses() {
             </div>
           </div>
         )}
-
-        <button type="button" className="ee-new ee-anim" onClick={openModal}>
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          New claim
-        </button>
 
         <div className="ee-chips ee-anim">
           {FILTERS.map((f) => (
@@ -516,11 +603,19 @@ export default function EmployeeExpenses() {
         )}
       </div>
 
-      {modalOpen && form && (
+
+      {modalOpen && form && createPortal((
         <div className="ee-overlay" onClick={() => !submitting && setModalOpen(false)}>
           <div className="ee-sheet" onClick={(ev) => ev.stopPropagation()}>
             <div className="ee-sheet-grip" />
             <h2 className="ee-sheet-title">New {form.claimType === 'mileage' ? 'mileage' : 'expense'} claim</h2>
+            {/* Banner must live INSIDE the portaled sheet — the page-level banner
+                (in .ee-wrap) is painted behind this full-screen overlay, so any
+                validation/API feedback fired while the modal is open would be
+                invisible ("submit does nothing"). */}
+            {banner && (
+              <div className={`ee-banner ${banner.kind === 'success' ? 'is-success' : 'is-error'}`}>{banner.text}</div>
+            )}
             <form onSubmit={submitExpense}>
               <div className="ee-toggle" role="group" aria-label="Claim type">
                 <button
@@ -580,6 +675,12 @@ export default function EmployeeExpenses() {
                       <input id="ee-date" className="ee-input" type="date" value={form.date} max={todayYMD()} onChange={(ev) => setForm((f) => ({ ...f, date: ev.target.value }))} />
                     </div>
                   </div>
+                  {form.category === 'Other' && (
+                    <div className="ee-field">
+                      <label className="ee-label" htmlFor="ee-category-custom">Specify category</label>
+                      <input id="ee-category-custom" className="ee-input" type="text" placeholder="Enter category" value={form.customCategory} onChange={(ev) => setForm((f) => ({ ...f, customCategory: ev.target.value }))} />
+                    </div>
+                  )}
                   <div className="ee-row2">
                     <div className="ee-field">
                       <label className="ee-label" htmlFor="ee-supplier">Supplier</label>
@@ -673,6 +774,40 @@ export default function EmployeeExpenses() {
                   </div>
                 </>
               )}
+
+              <div className="ee-field">
+                <label className="ee-label">Receipt / document <span className="ee-optional">· optional</span></label>
+                {receiptFile ? (
+                  <div className="ee-file">
+                    <div className="ee-file-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+                      </svg>
+                    </div>
+                    <div className="ee-file-meta">
+                      <div className="ee-file-name">{receiptFile.name}</div>
+                      <div className="ee-file-size">{(receiptFile.size / 1024).toFixed(0)} KB</div>
+                    </div>
+                    <button type="button" className="ee-file-remove" onClick={() => setReceiptFile(null)} disabled={submitting} aria-label="Remove file">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <label className="ee-upload">
+                    <input type="file" accept="image/*,.pdf" onChange={onPickFile} hidden />
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" />
+                    </svg>
+                    <span className="ee-upload-text">
+                      Attach receipt
+                      <small>Image or PDF · max 10MB</small>
+                    </span>
+                  </label>
+                )}
+              </div>
+
               <div className="ee-actions">
                 <button type="button" className="ee-btn ee-btn-cancel" onClick={() => setModalOpen(false)} disabled={submitting}>Cancel</button>
                 <button type="submit" className="ee-btn ee-btn-submit" disabled={submitting}>
@@ -683,7 +818,7 @@ export default function EmployeeExpenses() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
     </>
   );
 }

@@ -490,13 +490,13 @@ function timeOnly(t) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-function formatDuration(mins) {
-  if (mins == null || mins < 0) return null;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
+function formatDuration(secs) {
+  if (secs == null || secs < 0) return null;
+  const total = Math.round(secs);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 function formatTimerHMS(secs) {
@@ -513,14 +513,15 @@ function toYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
-function netMinutes(entry) {
+function netSeconds(entry) {
   const start = timeToDate(entry?.clockIn);
   const end = timeToDate(entry?.clockOut);
   if (!start || !end) return null;
-  let total = Math.floor((end - start) / 60000);
-  if (total < 0) total += 24 * 60;
-  const breakSum = (entry?.breaks || []).reduce((acc, b) => acc + (Number(b?.duration) || 0), 0);
-  return Math.max(0, total - breakSum);
+  let total = Math.floor((end - start) / 1000);
+  if (total < 0) total += 24 * 3600;
+  // break durations are stored in minutes (may be fractional) → convert to seconds
+  const breakSum = (entry?.breaks || []).reduce((acc, b) => acc + (Number(b?.duration) || 0), 0) * 60;
+  return Math.max(0, Math.round(total - breakSum));
 }
 
 function entryDate(entry) {
@@ -602,37 +603,65 @@ export default function ClockInDetail() {
     }
   }
 
-  async function changeShiftStatus(newStatus, confirmText) {
+  // Admin shift actions mirror the web dashboard: they hit the dedicated
+  // /clock/{in,out,onbreak,endbreak} endpoints, which key entries by the
+  // EmployeesHub _id. (The old code used /clock/admin/status, which does
+  // User.findById — the workforce list is EmployeesHub-keyed, so that always
+  // 404'd with "Employee not found".) We try the EmployeesHub _id first, then
+  // fall back to the linked User _id so employees who clocked *themselves* in
+  // (those entries are keyed by the User _id) also resolve. Admins have no hub
+  // record, so employee._id already is their User _id.
+  const SHIFT_ACTIONS = {
+    'clock-in':    { url: '/clock/in',       next: 'clocked-in',  stampField: 'clockIn',  ok: 'Clocked in'  },
+    'clock-out':   { url: '/clock/out',      next: 'clocked-out', stampField: 'clockOut', ok: 'Clocked out' },
+    'start-break': { url: '/clock/onbreak',  next: 'on-break',    stampField: 'breakIn',  ok: 'Started break' },
+    'resume-work': { url: '/clock/endbreak', next: 'clocked-in',  stampField: 'breakOut', ok: 'Resumed work' },
+  };
+
+  function isNotFoundError(err) {
+    if (err?.response?.status === 404) return true;
+    const msg = (err?.response?.data?.message || '').toLowerCase();
+    return /not found|no timeentry|must clock in|not clocked in/.test(msg);
+  }
+
+  async function doShiftAction(action, confirmText) {
     if (!employee) return;
-    // /clock/admin/status expects the User _id. For regular staff, employee._id
-    // is the EmployeesHub id, so prefer employee.userId (the linked User ref);
-    // admins are already keyed by their User _id under employee._id.
-    const empId =
-      (employee.userId && (employee.userId._id || employee.userId)) ||
-      employee._id ||
-      employee.id ||
-      id;
-    if (!empId) {
+    const cfg = SHIFT_ACTIONS[action];
+    if (!cfg) return;
+
+    // Candidate ids, most-likely first. A "not found" on the first is safe to
+    // retry with the next: the server hasn't mutated anything on a 404.
+    const hubId = employee._id || employee.id || id;
+    const userId = employee.userId && (employee.userId._id || employee.userId);
+    const candidates = [...new Set([hubId, userId].filter(Boolean).map(String))];
+    if (candidates.length === 0) {
       flash('error', "Couldn't find employee ID");
       return;
     }
     if (confirmText && !window.confirm(confirmText)) return;
+
     setActingId('shift');
     try {
-      await api.post('/clock/admin/status', { employeeId: empId, status: newStatus });
+      let lastErr = null;
+      let done = false;
+      for (const employeeId of candidates) {
+        try {
+          await api.post(cfg.url, { employeeId });
+          done = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (!isNotFoundError(err)) throw err;
+        }
+      }
+      if (!done) throw lastErr;
+
       const stamp = new Date().toISOString();
       setEmployee((prev) => {
         if (!prev) return prev;
-        const next = { ...prev, status: newStatus };
-        if (newStatus === 'on-break')   next.breakIn = stamp;
-        if (newStatus === 'clocked-in') next.breakOut = stamp;
-        if (newStatus === 'clocked-out') next.clockOut = stamp;
-        return next;
+        return { ...prev, status: cfg.next, [cfg.stampField]: stamp };
       });
-      flash('success',
-        newStatus === 'on-break'   ? 'Started break'
-        : newStatus === 'clocked-in' ? 'Resumed work'
-        : 'Clocked out');
+      flash('success', cfg.ok);
       fetchDetail();
     } catch (err) {
       flash('error', getErrorMessage(err));
@@ -755,13 +784,13 @@ export default function ClockInDetail() {
   const todayStats = useMemo(() => {
     const inT = liveSession?.start ? timeOnly(liveSession.start) : null;
     const outT = liveSession?.end ? timeOnly(liveSession.end) : null;
-    const breaks = (todayEntry?.breaks || []).reduce((a, b) => a + (Number(b?.duration) || 0), 0);
+    const breakSec = (todayEntry?.breaks || []).reduce((a, b) => a + (Number(b?.duration) || 0), 0) * 60;
     const isActive = status === 'clocked-in' || status === 'on-break';
-    let netMin = todayEntry ? netMinutes(todayEntry) : null;
-    if (netMin == null && isActive && liveSeconds != null) {
-      netMin = Math.max(0, Math.floor(liveSeconds / 60) - breaks);
+    let netSec = todayEntry ? netSeconds(todayEntry) : null;
+    if (netSec == null && isActive && liveSeconds != null) {
+      netSec = Math.max(0, Math.round(liveSeconds - breakSec));
     }
-    return { inT, outT, breaks, netMin };
+    return { inT, outT, breakSec, netSec };
   }, [todayEntry, liveSession, liveSeconds, status]);
 
   const weekStats = useMemo(() => {
@@ -771,18 +800,18 @@ export default function ClockInDetail() {
       const diffDays = Math.floor((today - d) / (1000 * 60 * 60 * 24));
       return diffDays >= 0 && diffDays < 7;
     });
-    let totalMin = 0;
+    let totalSec = 0;
     const days = new Set();
     for (const e of last7) {
-      const n = netMinutes(e);
+      const n = netSeconds(e);
       if (n != null) {
-        totalMin += n;
+        totalSec += n;
         const d = entryDate(e);
         if (d) days.add(toYMD(d));
       }
     }
-    const avg = days.size > 0 ? Math.round(totalMin / days.size) : null;
-    return { totalMin, days: days.size, avg };
+    const avg = days.size > 0 ? Math.round(totalSec / days.size) : null;
+    return { totalSec, days: days.size, avg };
   }, [entries, today]);
 
   const timeline = useMemo(() => {
@@ -885,13 +914,34 @@ export default function ClockInDetail() {
               )}
             </section>
 
+            {!(status === 'clocked-in' || status === 'on-break') && status !== 'on-leave' && (
+              <div className="cd-shift-actions cd-anim">
+                <button
+                  type="button"
+                  className="cd-shift-btn is-clockout"
+                  onClick={() => doShiftAction('clock-in', `Clock in ${fullName(employee)}?`)}
+                  disabled={actingId === 'shift'}
+                >
+                  {actingId === 'shift' ? <span className="cd-mini-spin" /> : (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                      <polyline points="10 17 15 12 10 7" />
+                      <line x1="15" y1="12" x2="3" y2="12" />
+                    </svg>
+                  )}
+                  Clock In
+                </button>
+              </div>
+            )}
+
             {(status === 'clocked-in' || status === 'on-break') && (
               <div className="cd-shift-actions cd-anim">
                 {status === 'clocked-in' ? (
                   <button
                     type="button"
                     className="cd-shift-btn is-break"
-                    onClick={() => changeShiftStatus('on-break', `Start a break for ${fullName(employee)}?`)}
+                    onClick={() => doShiftAction('start-break', `Start a break for ${fullName(employee)}?`)}
                     disabled={actingId === 'shift'}
                   >
                     {actingId === 'shift' ? <span className="cd-mini-spin" /> : (
@@ -910,7 +960,7 @@ export default function ClockInDetail() {
                   <button
                     type="button"
                     className="cd-shift-btn is-resume"
-                    onClick={() => changeShiftStatus('clocked-in', `Resume work for ${fullName(employee)}?`)}
+                    onClick={() => doShiftAction('resume-work', `Resume work for ${fullName(employee)}?`)}
                     disabled={actingId === 'shift'}
                   >
                     {actingId === 'shift' ? <span className="cd-mini-spin" /> : (
@@ -925,7 +975,7 @@ export default function ClockInDetail() {
                 <button
                   type="button"
                   className="cd-shift-btn is-clockout"
-                  onClick={() => changeShiftStatus('clocked-out', `Clock out ${fullName(employee)}?`)}
+                  onClick={() => doShiftAction('clock-out', `Clock out ${fullName(employee)}?`)}
                   disabled={actingId === 'shift'}
                 >
                   {actingId === 'shift' ? <span className="cd-mini-spin" /> : (
@@ -957,14 +1007,14 @@ export default function ClockInDetail() {
               </div>
               <div className="cd-stat-tile">
                 <div className="cd-stat-tile-label">Breaks</div>
-                <div className={`cd-stat-tile-value${todayStats.breaks > 0 ? '' : ' is-muted'}`}>
-                  {todayStats.breaks > 0 ? formatDuration(todayStats.breaks) : '—'}
+                <div className={`cd-stat-tile-value${todayStats.breakSec > 0 ? '' : ' is-muted'}`}>
+                  {todayStats.breakSec > 0 ? formatDuration(todayStats.breakSec) : '—'}
                 </div>
               </div>
               <div className="cd-stat-tile">
                 <div className="cd-stat-tile-label">Net Hours</div>
-                <div className={`cd-stat-tile-value${todayStats.netMin != null ? '' : ' is-muted'}`}>
-                  {todayStats.netMin != null ? formatDuration(todayStats.netMin) : '—'}
+                <div className={`cd-stat-tile-value${todayStats.netSec != null ? '' : ' is-muted'}`}>
+                  {todayStats.netSec != null ? formatDuration(todayStats.netSec) : '—'}
                 </div>
               </div>
             </div>
@@ -984,7 +1034,7 @@ export default function ClockInDetail() {
             <h3 className="cd-section-label">
               <span>Last 7 days</span>
               <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0.5, fontSize: '0.7rem', color: '#7a8e84' }}>
-                {weekStats.days} days · {formatDuration(weekStats.totalMin) || '0h'}{weekStats.avg ? ` · avg ${formatDuration(weekStats.avg)}` : ''}
+                {weekStats.days} days · {formatDuration(weekStats.totalSec) || '00:00:00'}{weekStats.avg ? ` · avg ${formatDuration(weekStats.avg)}` : ''}
               </span>
             </h3>
 
@@ -998,7 +1048,7 @@ export default function ClockInDetail() {
             ) : (
               recentEntries.map((e, i) => {
                 const d = entryDate(e);
-                const net = netMinutes(e);
+                const net = netSeconds(e);
                 const inT = timeOnly(e.clockIn);
                 const outT = timeOnly(e.clockOut);
                 const isEditing = editingId === e._id;

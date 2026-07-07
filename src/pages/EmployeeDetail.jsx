@@ -1,13 +1,89 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../utils/api';
 import { getErrorMessage } from '../utils/errorHandler';
+import { getUser, getUserGroup, USER_GROUPS } from '../utils/auth';
 
 // Mirrors web's EmployeeProfile.js fetch (line 109):
 //   GET /employee-profile/:id  →  employee object (not wrapped)
 // Backend field names drift; the helpers below try a few common spellings
 // (address1 vs addressLine1, phone vs phoneNumber, etc.) so the detail page
 // works regardless of which one the server returns.
+//
+// Admins and managers can also EDIT the record from here. Writes go to
+//   PUT /employees/:id   (the EmployeeHub _id — same id used to reach this page)
+// and the backend (employeeHubController.updateEmployee) enforces scope: admins
+// edit anyone, managers only their team (else 403). We deliberately expose only
+// non-restricted fields — role/status/manager changes stay on the web app, so a
+// manager never trips the "Managers cannot modify …" guard. jobTitle/department/
+// firstName/lastName/email are required by the schema, so blank values are
+// skipped rather than written (an empty required field 400s on save).
+
+const RELATIONSHIP_OPTIONS = ['Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Partner', 'Other'];
+
+// Field spec per section. `edit` marks admin/manager-editable fields; `required`
+// fields are skipped from the PUT when blank (they can't be cleared). `read`
+// lists fallback spellings the server may return; `save` lists the backend
+// key(s) a value writes to.
+const SECTIONS = [
+  {
+    id: 'basic',
+    title: 'Basic Details',
+    fields: [
+      { key: 'title', label: 'Title', edit: true, read: ['title'], save: ['title'] },
+      { key: 'firstName', label: 'First name', edit: true, required: true, read: ['firstName'], save: ['firstName'] },
+      { key: 'middleName', label: 'Middle name', edit: true, read: ['middleName'], save: ['middleName'] },
+      { key: 'lastName', label: 'Last name', edit: true, required: true, read: ['lastName'], save: ['lastName'] },
+      { key: 'gender', label: 'Gender', read: ['gender'] },
+      { key: 'dateOfBirth', label: 'Date of birth', type: 'date', read: ['dateOfBirth'] },
+    ],
+  },
+  {
+    id: 'job',
+    title: 'Job',
+    fields: [
+      { key: 'jobTitle', label: 'Job title', edit: true, required: true, read: ['jobRole', 'jobTitle', 'position'], save: ['jobTitle'] },
+      { key: 'department', label: 'Department', edit: true, required: true, read: ['department'], save: ['department'] },
+      { key: 'team', label: 'Team', read: ['team'] },
+      { key: 'organisation', label: 'Organisation', get: organisationName },
+      { key: 'manager', label: 'Manager', get: managerName },
+      { key: 'startDate', label: 'Start date', type: 'date', read: ['startDate', 'hireDate'] },
+      { key: 'role', label: 'Role', type: 'role', read: ['role'] },
+    ],
+  },
+  {
+    id: 'contact',
+    title: 'Contact',
+    fields: [
+      { key: 'email', label: 'Email', type: 'email', edit: true, required: true, read: ['email', 'emailAddress'], save: ['email'] },
+      { key: 'phone', label: 'Phone', type: 'tel', edit: true, read: ['phone', 'mobileNumber', 'phoneNumber', 'workPhone'], save: ['phone', 'workPhone'] },
+    ],
+  },
+  {
+    id: 'address',
+    title: 'Address',
+    optional: true,
+    fields: [
+      { key: 'address1', label: 'Address line 1', edit: true, read: ['address1', 'addressLine1', 'address'], save: ['address1'] },
+      { key: 'address2', label: 'Address line 2', edit: true, read: ['address2', 'addressLine2'], save: ['address2'] },
+      { key: 'address3', label: 'Address line 3', edit: true, read: ['address3', 'addressLine3'], save: ['address3'] },
+      { key: 'townCity', label: 'Town / City', edit: true, read: ['townCity', 'city'], save: ['townCity'] },
+      { key: 'county', label: 'County', edit: true, read: ['county'], save: ['county'] },
+      { key: 'postcode', label: 'Postcode', edit: true, read: ['postcode', 'postalCode'], save: ['postcode'] },
+    ],
+  },
+  {
+    id: 'emergency',
+    title: 'Emergency Contact',
+    optional: true,
+    fields: [
+      { key: 'emergencyContactName', label: 'Name', edit: true, read: ['emergencyContactName', 'emergencyContact'], save: ['emergencyContactName'] },
+      { key: 'emergencyContactRelation', label: 'Relationship', type: 'select', options: RELATIONSHIP_OPTIONS, edit: true, read: ['emergencyContactRelation', 'emergencyRelationship'], save: ['emergencyContactRelation'] },
+      { key: 'emergencyContactPhone', label: 'Phone', type: 'tel', edit: true, read: ['emergencyContactPhone', 'emergencyPhone', 'emergencyMobile'], save: ['emergencyContactPhone'] },
+      { key: 'emergencyContactEmail', label: 'Email', type: 'email', edit: true, read: ['emergencyContactEmail', 'emergencyEmail'], save: ['emergencyContactEmail'] },
+    ],
+  },
+];
 
 const styles = `
   @keyframes ed-fadeUp {
@@ -105,14 +181,17 @@ const styles = `
     box-shadow: none;
   }
 
-  /* ── Section card ── */
+  /* ── Section header (title + edit affordance) ── */
+  .ed-section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.5rem; margin: 1.2rem 0.25rem 0.5rem;
+  }
   .ed-section-title {
     display: inline-flex; align-items: center; gap: 0.55rem;
-    padding: 0 0.25rem;
     font-size: 11px; font-weight: 700;
     letter-spacing: 0.2em; text-transform: uppercase;
     color: #52796f;
-    margin: 1.2rem 0 0.5rem;
+    margin: 0;
   }
   .ed-section-title::before {
     content: '';
@@ -120,6 +199,25 @@ const styles = `
     background: linear-gradient(90deg, #84a98c, rgba(132, 169, 140, 0));
     border-radius: 1px;
   }
+  .ed-edit-btn {
+    -webkit-tap-highlight-color: transparent;
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: none; border: none; cursor: pointer;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; color: #52796f;
+    padding: 4px 8px; border-radius: 8px;
+  }
+  .ed-edit-btn:active { background: rgba(132,169,140,0.14); }
+  .ed-edit-actions { display: flex; align-items: center; gap: 0.4rem; }
+  .ed-btn {
+    -webkit-tap-highlight-color: transparent;
+    font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
+    padding: 0.42rem 0.85rem; border-radius: 999px; border: none; cursor: pointer;
+  }
+  .ed-btn:disabled { opacity: 0.55; }
+  .ed-btn-save { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; }
+  .ed-btn-save:active { transform: scale(0.97); }
+  .ed-btn-cancel { background: #eef2ef; color: #52796f; }
+
   .ed-card {
     background: #fff;
     border-radius: 16px;
@@ -127,11 +225,13 @@ const styles = `
     box-shadow: 0 1px 2px rgba(47, 62, 70, 0.04);
     padding: 0.4rem 0.95rem;
   }
+  .ed-card.is-editing { border-color: rgba(82,121,111,0.55); box-shadow: 0 0 0 3px rgba(82,121,111,0.10); }
   .ed-row {
     display: flex; align-items: flex-start; gap: 0.85rem;
     padding: 0.65rem 0;
     border-bottom: 1px solid rgba(212, 221, 214, 0.5);
   }
+  .ed-row.is-edit { flex-direction: column; gap: 0.4rem; }
   .ed-row:last-child { border-bottom: none; }
   .ed-row-label {
     flex: 0 0 38%;
@@ -154,6 +254,21 @@ const styles = `
     border-bottom: 1px dashed rgba(53, 79, 82, 0.35);
   }
   .ed-row-link:active { color: #52796f; }
+
+  .ed-input, .ed-select {
+    width: 100%; box-sizing: border-box;
+    padding: 0.62rem 0.7rem; border: 1.5px solid #d4ddd6; border-radius: 10px;
+    font-family: 'DM Sans', sans-serif; font-size: 16px; color: #2f3e46; background: #fff;
+    outline: none; -webkit-appearance: none; appearance: none;
+    transition: border-color 0.18s, box-shadow 0.18s;
+  }
+  .ed-input:focus, .ed-select:focus { border-color: #52796f; box-shadow: 0 0 0 3px rgba(82,121,111,0.12); }
+
+  .ed-save-error {
+    margin-top: 0.6rem; font-size: 0.75rem; color: #b85c50; font-weight: 500;
+    display: flex; align-items: center; gap: 0.35rem;
+  }
+  .ed-empty-note { padding: 0.5rem 0; font-size: 0.78rem; color: #b8c4bc; }
 
   /* ── States ── */
   .ed-skel-hero {
@@ -192,93 +307,26 @@ const styles = `
   .ed-retry:active { transform: scale(0.97); }
 `;
 
-function initials(emp) {
-  if (emp?.initials) return emp.initials;
-  const f = (emp?.firstName || '').charAt(0);
-  const l = (emp?.lastName || '').charAt(0);
-  return (f + l).toUpperCase() || '?';
-}
-
-function fullName(emp) {
-  return emp?.name ||
-    [emp?.firstName, emp?.lastName].filter(Boolean).join(' ').trim() ||
-    emp?.email ||
-    'Employee';
-}
-
-function jobTitle(emp) {
-  return emp?.jobRole || emp?.jobTitle || emp?.position || null;
-}
-
-function emailOf(emp)  { return emp?.email || emp?.emailAddress || null; }
-function phoneOf(emp)  { return emp?.phone || emp?.phoneNumber || emp?.mobileNumber || emp?.workPhone || null; }
-
-function managerName(emp) {
-  if (!emp) return null;
-  if (emp.managerName) return emp.managerName;
-  const m = emp.manager;
-  if (m && typeof m === 'object') {
-    return [m.firstName, m.lastName].filter(Boolean).join(' ').trim() || null;
-  }
-  return null;
-}
-
-function organisationName(emp) {
-  return emp?.organisationName || emp?.OrganisationName || emp?.office || null;
-}
-
-function formatDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function roleLabel(role) {
-  if (!role) return null;
-  return role.replace(/-/g, ' ');
-}
-
-function address(emp) {
-  if (!emp) return {};
-  return {
-    line1: emp.address1 || emp.addressLine1 || emp.address || null,
-    line2: emp.address2 || emp.addressLine2 || null,
-    line3: emp.address3 || emp.addressLine3 || null,
-    city:  emp.townCity || emp.city || null,
-    county: emp.county || null,
-    postcode: emp.postcode || emp.postalCode || null,
-  };
-}
-
-function emergency(emp) {
-  if (!emp) return {};
-  return {
-    name:     emp.emergencyContactName || emp.emergencyContact || null,
-    relation: emp.emergencyContactRelation || emp.emergencyRelationship || null,
-    phone:    emp.emergencyContactPhone || emp.emergencyPhone || emp.emergencyMobile || null,
-    email:    emp.emergencyContactEmail || emp.emergencyEmail || null,
-  };
-}
-
-function hasAny(obj) {
-  return Object.values(obj).some((v) => v != null && v !== '');
-}
-
 export default function EmployeeDetail() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [emp, setEmp] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [canManage, setCanManage] = useState(false);
+
+  const [editingSection, setEditingSection] = useState(null);
+  const [editData, setEditData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   async function fetchEmployee() {
     setLoading(true);
     setError(null);
+    setEditingSection(null);
     try {
       const { data } = await api.get(`/employee-profile/${id}`);
       // This endpoint returns the object directly (no { data } wrapper).
-      setEmp(data || null);
+      setEmp(unwrap(data) || null);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -290,6 +338,62 @@ export default function EmployeeDetail() {
     if (id) fetchEmployee();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Only admins and managers get edit affordances. The backend still has the
+  // final say (a manager editing outside their team gets a 403 we surface).
+  useEffect(() => {
+    (async () => {
+      const group = getUserGroup(await getUser());
+      setCanManage(group === USER_GROUPS.ADMIN || group === USER_GROUPS.MANAGER);
+    })();
+  }, []);
+
+  function startEdit(section) {
+    const d = {};
+    section.fields.forEach((f) => {
+      if (f.edit) d[f.key] = readRaw(emp, f);
+    });
+    setEditData(d);
+    setSaveError(null);
+    setEditingSection(section.id);
+  }
+
+  function cancelEdit() {
+    setEditingSection(null);
+    setEditData({});
+    setSaveError(null);
+  }
+
+  async function saveSection(section) {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const payload = {};
+      section.fields.forEach((f) => {
+        if (!f.edit) return;
+        const val = (editData[f.key] ?? '').toString().trim();
+        // Required schema fields can't be cleared — skip when blank so the
+        // save doesn't 400 on a missing required value.
+        if (!val && f.required) return;
+        (f.save || [f.key]).forEach((k) => { payload[k] = val; });
+      });
+
+      if (Object.keys(payload).length === 0) {
+        cancelEdit();
+        return;
+      }
+
+      const { data } = await api.put(`/employees/${id}`, payload);
+      const updated = unwrap(data);
+      setEmp((prev) => (isRecord(updated) ? { ...prev, ...updated } : { ...prev, ...payload }));
+      setEditingSection(null);
+      setEditData({});
+    } catch (err) {
+      setSaveError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -325,14 +429,7 @@ export default function EmployeeDetail() {
   const role  = roleLabel(emp.role);
   const dept  = emp.department || null;
   const team  = emp.team || null;
-  const org   = organisationName(emp);
-  const mgr   = managerName(emp);
-  const start = formatDate(emp.startDate || emp.hireDate);
-  const dob   = formatDate(emp.dateOfBirth);
-  const gender = emp.gender || null;
   const job   = jobTitle(emp);
-  const addr  = address(emp);
-  const ec    = emergency(emp);
 
   return (
     <>
@@ -366,80 +463,224 @@ export default function EmployeeDetail() {
           </div>
         )}
 
-        {/* Job */}
-        <h3 className="ed-section-title">Job</h3>
-        <div className="ed-card ed-anim">
-          <Row label="Title"        value={job} />
-          <Row label="Department"   value={dept} />
-          <Row label="Team"         value={team} />
-          <Row label="Organisation" value={org} />
-          <Row label="Manager"      value={mgr} />
-          <Row label="Start date"   value={start} />
-          <Row label="Role"         value={role} />
-        </div>
+        {SECTIONS.map((section) => {
+          const isEditing = editingSection === section.id;
+          const sectionEditable = canManage && section.fields.some((f) => f.edit);
+          const populated = section.fields.some((f) => readRaw(emp, f) !== '');
 
-        {/* Contact */}
-        <h3 className="ed-section-title">Contact</h3>
-        <div className="ed-card ed-anim">
-          <Row
-            label="Email"
-            value={email ? <a className="ed-row-link" href={`mailto:${email}`}>{email}</a> : null}
-          />
-          <Row
-            label="Phone"
-            value={phone ? <a className="ed-row-link" href={`tel:${phone}`}>{phone}</a> : null}
-          />
-          <Row label="Gender"        value={gender} />
-          <Row label="Date of birth" value={dob} />
-        </div>
+          // Optional sections (address / emergency) stay hidden for plain
+          // viewers when empty, but managers/admins always see them so missing
+          // details can be filled in.
+          if (section.optional && !populated && !isEditing && !sectionEditable) {
+            return null;
+          }
 
-        {/* Address — only render the card if at least one field is populated */}
-        {hasAny(addr) && (
-          <>
-            <h3 className="ed-section-title">Address</h3>
-            <div className="ed-card ed-anim">
-              <Row label="Line 1"   value={addr.line1} />
-              <Row label="Line 2"   value={addr.line2} />
-              <Row label="Line 3"   value={addr.line3} />
-              <Row label="City"     value={addr.city} />
-              <Row label="County"   value={addr.county} />
-              <Row label="Postcode" value={addr.postcode} />
+          return (
+            <div key={section.id}>
+              <div className="ed-section-head">
+                <span className="ed-section-title">{section.title}</span>
+                {sectionEditable && (
+                  isEditing ? (
+                    <div className="ed-edit-actions">
+                      <button className="ed-btn ed-btn-cancel" onClick={cancelEdit} disabled={saving}>
+                        Cancel
+                      </button>
+                      <button className="ed-btn ed-btn-save" onClick={() => saveSection(section)} disabled={saving}>
+                        {saving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  ) : (
+                    editingSection === null && (
+                      <button className="ed-edit-btn" onClick={() => startEdit(section)}>
+                        <PencilIcon /> Edit
+                      </button>
+                    )
+                  )
+                )}
+              </div>
+
+              <div className={`ed-card ed-anim ${isEditing ? 'is-editing' : ''}`}>
+                {section.optional && !populated && !isEditing ? (
+                  <div className="ed-empty-note">No information on record.</div>
+                ) : (
+                  section.fields.map((field) => (
+                    <DetailRow
+                      key={field.key}
+                      field={field}
+                      src={emp}
+                      isEditing={isEditing && field.edit}
+                      value={editData[field.key]}
+                      onChange={(v) => setEditData((p) => ({ ...p, [field.key]: v }))}
+                    />
+                  ))
+                )}
+                {isEditing && saveError && (
+                  <div className="ed-save-error">
+                    <AlertIcon />
+                    {saveError}
+                  </div>
+                )}
+              </div>
             </div>
-          </>
-        )}
-
-        {/* Emergency contact */}
-        {hasAny(ec) && (
-          <>
-            <h3 className="ed-section-title">Emergency Contact</h3>
-            <div className="ed-card ed-anim">
-              <Row label="Name"     value={ec.name} />
-              <Row label="Relation" value={ec.relation} />
-              <Row
-                label="Phone"
-                value={ec.phone ? <a className="ed-row-link" href={`tel:${ec.phone}`}>{ec.phone}</a> : null}
-              />
-              <Row
-                label="Email"
-                value={ec.email ? <a className="ed-row-link" href={`mailto:${ec.email}`}>{ec.email}</a> : null}
-              />
-            </div>
-          </>
-        )}
+          );
+        })}
       </div>
     </>
   );
 }
 
-function Row({ label, value }) {
-  const isEmpty = value == null || value === '';
+function DetailRow({ field, src, isEditing, value, onChange }) {
+  if (isEditing) {
+    return (
+      <div className="ed-row is-edit">
+        <span className="ed-row-label">{field.label}</span>
+        {field.type === 'select' ? (
+          <select className="ed-select" value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
+            <option value="">Select {field.label.toLowerCase()}</option>
+            {(field.options || []).map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="ed-input"
+            type={inputType(field.type)}
+            inputMode={inputMode(field.type)}
+            autoCapitalize={field.type === 'email' ? 'none' : 'sentences'}
+            autoCorrect="off"
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={`Enter ${field.label.toLowerCase()}`}
+          />
+        )}
+      </div>
+    );
+  }
+
+  const raw = readRaw(src, field);
+  const isEmpty = raw === '';
+  let display = fmt(raw, field);
+  if (!isEmpty && field.type === 'email') display = <a className="ed-row-link" href={`mailto:${raw}`}>{raw}</a>;
+  else if (!isEmpty && field.type === 'tel') display = <a className="ed-row-link" href={`tel:${raw}`}>{raw}</a>;
+
   return (
     <div className="ed-row">
-      <span className="ed-row-label">{label}</span>
-      <span className={`ed-row-value ${isEmpty ? 'is-muted' : ''}`}>
-        {isEmpty ? '—' : value}
-      </span>
+      <span className="ed-row-label">{field.label}</span>
+      <span className={`ed-row-value ${isEmpty ? 'is-muted' : ''}`}>{isEmpty ? '—' : display}</span>
     </div>
+  );
+}
+
+/* ── helpers ── */
+
+function isRecord(o) {
+  return !!o && typeof o === 'object' && (o._id || o.id || o.email || o.firstName);
+}
+
+function unwrap(payload) {
+  if (payload && typeof payload === 'object' && payload.success && payload.data) return payload.data;
+  return payload;
+}
+
+function readRaw(src, field) {
+  if (!src) return '';
+  if (field.get) return field.get(src) || '';
+  const keys = field.read || [field.key];
+  for (const k of keys) {
+    const v = src?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return '';
+}
+
+function fmt(raw, field) {
+  if (raw === '' || raw == null) return '';
+  if (field.type === 'date') return formatDate(raw) || '';
+  if (field.type === 'role') return String(raw).replace(/-/g, ' ');
+  return String(raw);
+}
+
+function inputType(type) {
+  if (type === 'email') return 'email';
+  if (type === 'tel') return 'tel';
+  return 'text';
+}
+
+function inputMode(type) {
+  if (type === 'email') return 'email';
+  if (type === 'tel') return 'tel';
+  return 'text';
+}
+
+function initials(emp) {
+  if (emp?.initials) return emp.initials;
+  const f = (emp?.firstName || '').charAt(0);
+  const l = (emp?.lastName || '').charAt(0);
+  return (f + l).toUpperCase() || '?';
+}
+
+function fullName(emp) {
+  return emp?.name ||
+    [emp?.firstName, emp?.middleName, emp?.lastName].filter(Boolean).join(' ').trim() ||
+    emp?.email ||
+    'Employee';
+}
+
+function jobTitle(emp) {
+  return emp?.jobRole || emp?.jobTitle || emp?.position || null;
+}
+
+function emailOf(emp)  { return emp?.email || emp?.emailAddress || null; }
+function phoneOf(emp)  { return emp?.phone || emp?.phoneNumber || emp?.mobileNumber || emp?.workPhone || null; }
+
+function managerName(emp) {
+  if (!emp) return '';
+  if (emp.managerName) return emp.managerName;
+  // /employee-profile returns the line manager as `manager`; other feeds
+  // populate the ref as `managerId`. Accept either shape.
+  const m = emp.manager || emp.managerId;
+  if (m && typeof m === 'object') {
+    return [m.firstName, m.lastName].filter(Boolean).join(' ').trim();
+  }
+  // A plain string is a name; a bare ObjectId is an unpopulated ref — skip it.
+  if (typeof m === 'string' && !/^[a-f0-9]{24}$/i.test(m)) return m;
+  return '';
+}
+
+function organisationName(emp) {
+  return emp?.organisationName || emp?.OrganisationName || emp?.office || '';
+}
+
+function formatDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function roleLabel(role) {
+  if (!role) return null;
+  return role.replace(/-/g, ' ');
+}
+
+function PencilIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 8v4" />
+      <path d="M12 16h.01" />
+    </svg>
   );
 }
 

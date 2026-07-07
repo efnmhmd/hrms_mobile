@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getUser, getUserGroup, USER_GROUPS } from '../../utils/auth';
 import { getErrorMessage } from '../../utils/errorHandler';
@@ -46,15 +47,16 @@ const styles = `
   .el-banner.is-success { background: linear-gradient(135deg, #f0f5f2, #eaf2ec); border-left: 3px solid #52796f; color: #2f3e46; }
   .el-banner.is-error { background: linear-gradient(135deg, #fdf3f2, #fdecea); border-left: 3px solid #c0756a; color: #7a3028; }
 
-  /* Upload call-to-action (admin) */
-  .el-upload-cta {
-    width: 100%; margin-bottom: 0.85rem; padding: 0.7rem 0.9rem; border-radius: 12px; border: none;
+  /* Header upload action (admin) */
+  .el-header-upload {
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.35rem;
+    height: 34px; padding: 0 0.8rem; border-radius: 10px; border: none;
     background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5;
-    font-family: 'DM Sans', sans-serif; font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em;
-    display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem;
-    box-shadow: 0 3px 12px rgba(53,79,82,0.2); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform 0.12s;
+    font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600;
+    box-shadow: 0 4px 12px rgba(53,79,82,0.2); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; transition: transform 0.12s;
   }
-  .el-upload-cta:active { transform: scale(0.98); }
+  .el-header-upload:active { transform: scale(0.95); }
 
   .el-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; margin-bottom: 0.85rem; }
   .el-stat { border: 1px solid rgba(212, 221, 214, 0.7); background: #fff; border-radius: 12px; padding: 0.6rem 0.5rem; text-align: center; box-shadow: 0 1px 2px rgba(47, 62, 70, 0.04); }
@@ -539,6 +541,15 @@ export default function ELearning() {
               {!loading && !error && <span className="el-count"> · {filtered.length}</span>}
             </h1>
           </div>
+          {isAdmin && (
+            <button type="button" className="el-header-upload" onClick={() => setShowUpload(true)} aria-label="Upload material">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+              </svg>
+              Upload
+            </button>
+          )}
           <button
             type="button"
             className={`el-refresh-btn${loading ? ' is-spinning' : ''}`}
@@ -559,16 +570,6 @@ export default function ELearning() {
           <div className={`el-banner ${banner.kind === 'success' ? 'is-success' : 'is-error'} el-anim`}>
             {banner.text}
           </div>
-        )}
-
-        {isAdmin && (
-          <button type="button" className="el-upload-cta el-anim" onClick={() => setShowUpload(true)}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
-            </svg>
-            Upload Material
-          </button>
         )}
 
         {isAdmin && !loading && !error && materials.length > 0 && (
@@ -721,7 +722,7 @@ export default function ELearning() {
       </div>
 
       {/* ── Upload modal (admin) ── */}
-      {showUpload && (
+      {showUpload && createPortal(
         <div className="el-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget && !uploading) closeUpload(); }}>
           <div className="el-modal">
             <div className="el-modal-head">
@@ -785,11 +786,12 @@ export default function ELearning() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* ── Completions modal ── */}
-      {compMaterial && (
+      {compMaterial && createPortal(
         <div className="el-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeCompletions(); }}>
           <div className="el-modal">
             <div className="el-modal-head">
@@ -875,11 +877,12 @@ export default function ELearning() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* ── Viewer overlay ── */}
-      {viewer && (
+      {viewer && createPortal(
         <div className="el-viewer">
           <div className="el-viewer-bar">
             <span className="el-viewer-title">{viewer.material?.name || viewer.material?.title || 'Material'}</span>
@@ -923,7 +926,8 @@ export default function ELearning() {
               <iframe className="el-viewer-frame" src={viewer.url} title={viewer.material?.name || 'Material'} />
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

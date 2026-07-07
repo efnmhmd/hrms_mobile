@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
 import { setToken, setUser, getUserGroup } from '../utils/auth';
 import { getErrorMessage } from '../utils/errorHandler';
@@ -307,6 +308,7 @@ function SubmitSpinner() {
 const REMEMBERED_EMAIL_KEY = 'hrms.rememberedEmail';
 
 export default function Login({ onLogin }) {
+  const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -507,10 +509,8 @@ export default function Login({ onLogin }) {
                 <button
                   type="button"
                   className="ts-forgot-link"
-                  onClick={() => {
-                    // Forgot-password flow is a future screen — surface a hint for now.
-                    setErrors({ general: 'Password reset is available on the web app.' });
-                  }}
+                  onClick={() => navigate('/forgot-password')}
+                  disabled={submitting}
                 >
                   Forgot password?
                 </button>

@@ -1,0 +1,16 @@
+{
+  "name": "Talent Shield HRMS",
+  "short_name": "HRMS",
+  "description": "Talent Shield HRMS — clock-ins, calendar, approvals and more.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2f3e46",
+  "theme_color": "#2f3e46",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
