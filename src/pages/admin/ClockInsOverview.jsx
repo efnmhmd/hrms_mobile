@@ -88,7 +88,21 @@ const styles = `
     padding: 0.55rem 0.4rem;
     text-align: center;
     box-shadow: 0 1px 2px rgba(47, 62, 70, 0.04);
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
   }
+  .co-stat:active { transform: scale(0.96); }
+  .co-stat.is-selected {
+    border-color: #52796f;
+    background: rgba(82,121,111,0.06);
+    box-shadow: 0 2px 8px rgba(82,121,111,0.12);
+  }
+  .co-stat.is-clocked-in.is-selected  { border-color: #52796f; background: rgba(82,121,111,0.09); }
+  .co-stat.is-on-break.is-selected    { border-color: #d8a64c; background: rgba(216,166,76,0.12); }
+  .co-stat.is-clocked-out.is-selected { border-color: #7a8e84; background: rgba(122,142,132,0.12); }
+  .co-stat.is-on-leave.is-selected    { border-color: #6d88c2; background: rgba(109,136,194,0.12); }
   .co-stat-val {
     font-size: 1.1rem; font-weight: 700;
     color: #2f3e46;
@@ -607,22 +621,27 @@ export default function ClockInsOverview() {
         </header>
 
         <div className="co-stats co-anim">
-          <div className="co-stat is-clocked-in">
-            <div className="co-stat-val">{stats['clocked-in']}</div>
-            <div className="co-stat-lab">In</div>
-          </div>
-          <div className="co-stat is-on-break">
-            <div className="co-stat-val">{stats['on-break']}</div>
-            <div className="co-stat-lab">Break</div>
-          </div>
-          <div className="co-stat is-clocked-out">
-            <div className="co-stat-val">{stats['clocked-out']}</div>
-            <div className="co-stat-lab">Out</div>
-          </div>
-          <div className="co-stat is-on-leave">
-            <div className="co-stat-val">{stats['on-leave']}</div>
-            <div className="co-stat-lab">Leave</div>
-          </div>
+          {[
+            { key: 'clocked-in',  label: 'In' },
+            { key: 'on-break',    label: 'Break' },
+            { key: 'clocked-out', label: 'Out' },
+            { key: 'on-leave',    label: 'Leave' },
+          ].map(({ key, label }) => {
+            const on = statusFilters.includes(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`co-stat is-${key}${on ? ' is-selected' : ''}`}
+                onClick={() => toggleFilter(setStatusFilters, key)}
+                aria-pressed={on}
+                aria-label={`${on ? 'Clear' : 'Filter by'} ${label}`}
+              >
+                <div className="co-stat-val">{stats[key]}</div>
+                <div className="co-stat-lab">{label}</div>
+              </button>
+            );
+          })}
         </div>
 
         <div className="co-search-row co-anim">

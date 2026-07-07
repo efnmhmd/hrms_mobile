@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
 
@@ -76,16 +77,16 @@ const styles = `
   }
   .mtm-btn-block { width: 100%; }
 
-  .mtm-header-add {
-    flex-shrink: 0;
-    width: 38px; height: 38px; border-radius: 11px;
-    background: linear-gradient(135deg, #354f52 0%, #52796f 100%);
-    color: #cad2c5; border: none;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 3px 10px rgba(53,79,82,0.22);
-    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  .mtm-header-btn {
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.35rem;
+    height: 34px; padding: 0 0.8rem; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5;
+    font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600;
+    box-shadow: 0 4px 12px rgba(53,79,82,0.2); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; transition: transform 0.12s;
   }
-  .mtm-header-add:active { transform: scale(0.94); }
+  .mtm-header-btn:active { transform: scale(0.95); }
+  .mtm-header-btn svg { flex-shrink: 0; }
 
   /* ── Search ── */
   .mtm-search { position: relative; margin-bottom: 0.85rem; }
@@ -714,11 +715,12 @@ export default function AdminManageTeams() {
             <p className="mtm-header-eyebrow">Organization</p>
             <h1 className="mtm-header-title">Manage Teams</h1>
           </div>
-          <button type="button" className="mtm-header-add" onClick={openCreate} aria-label="New team">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+          <button type="button" className="mtm-header-btn" onClick={openCreate} aria-label="New team">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
             </svg>
+            New team
           </button>
         </header>
 
@@ -791,7 +793,7 @@ export default function AdminManageTeams() {
       )}
 
       {/* ── Create · Step 1 (name) ── */}
-      {createStep === 1 && (
+      {createStep === 1 && createPortal(
         <div className="mtm-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}>
           <div className="mtm-sheet">
             <div className="mtm-sheet-head">
@@ -819,10 +821,10 @@ export default function AdminManageTeams() {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* ── Create · Step 2 (assign) ── */}
-      {createStep === 2 && (
+      {createStep === 2 && createPortal(
         <div className="mtm-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}>
           <div className="mtm-sheet">
             <div className="mtm-sheet-head">
@@ -898,10 +900,10 @@ export default function AdminManageTeams() {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* ── Edit ── */}
-      {editOpen && (
+      {editOpen && createPortal(
         <div className="mtm-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeEdit(); }}>
           <div className="mtm-sheet">
             <div className="mtm-sheet-head is-light">
@@ -979,10 +981,10 @@ export default function AdminManageTeams() {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* ── Add member ── */}
-      {addOpen && (
+      {addOpen && createPortal(
         <div className="mtm-overlay" onClick={(e) => { if (e.target === e.currentTarget) setAddOpen(false); }}>
           <div className="mtm-sheet">
             <div className="mtm-sheet-head is-light">
@@ -1067,10 +1069,10 @@ export default function AdminManageTeams() {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* ── Switch member ── */}
-      {switchMember && (
+      {switchMember && createPortal(
         <div className="mtm-overlay" onClick={(e) => { if (e.target === e.currentTarget) setSwitchMember(null); }}>
           <div className="mtm-sheet">
             <div className="mtm-sheet-head is-light">
@@ -1100,7 +1102,7 @@ export default function AdminManageTeams() {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </>
   );
 }

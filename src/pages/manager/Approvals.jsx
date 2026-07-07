@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
 
@@ -44,11 +45,11 @@ const styles = `
 
   /* ── Tabs ── */
   .ap-tabs {
-    display: flex; gap: 0.4rem;
+    display: flex; flex-wrap: wrap; gap: 0.4rem;
     margin-bottom: 0.85rem;
   }
   .ap-tab {
-    flex: 1;
+    flex: 1 1 calc(50% - 0.2rem);
     padding: 0.55rem 0.5rem;
     border-radius: 12px;
     border: 1px solid rgba(132, 169, 140, 0.4);
@@ -56,6 +57,7 @@ const styles = `
     color: #52796f;
     font-size: 0.78rem; font-weight: 600;
     letter-spacing: 0.04em;
+    white-space: nowrap;
     display: flex; align-items: center; justify-content: center; gap: 0.35rem;
     -webkit-tap-highlight-color: transparent;
     cursor: pointer;
@@ -215,6 +217,20 @@ const styles = `
   }
   .ap-type-pill.is-leave { background: rgba(82, 121, 111, 0.18); color: #354f52; }
   .ap-type-pill.is-expense { background: rgba(132, 169, 140, 0.22); color: #354f52; }
+  .ap-type-pill.is-overtime { background: rgba(111, 140, 152, 0.2); color: #354f52; }
+  .ap-type-pill.is-objective { background: rgba(196, 150, 90, 0.2); color: #6b5524; }
+
+  /* Manager feedback note on a sent-back objective */
+  .ap-feedback-note {
+    margin-top: 0.7rem; padding: 0.5rem 0.7rem; border-radius: 10px;
+    background: rgba(196, 150, 90, 0.1);
+    border: 1px solid rgba(196, 150, 90, 0.28);
+  }
+  .ap-feedback-note-label {
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: #6b5524; margin: 0 0 2px;
+  }
+  .ap-feedback-note-text { font-size: 0.76rem; color: #6b5524; margin: 0; line-height: 1.45; }
 
   .ap-card-details {
     margin: 0.65rem 0 0;
@@ -355,6 +371,54 @@ const styles = `
   .ap-sheet-btn:not(:disabled):active { transform: scale(0.98); }
   .ap-sheet-btn-cancel { background: #fff; color: #7a8e84; border: 1.5px solid #d4ddd6; }
   .ap-sheet-btn-confirm { background: linear-gradient(135deg, #8a3f36 0%, #b85c50 100%); color: #fbeae7; box-shadow: 0 4px 14px rgba(138,63,54,0.2); }
+
+  /* ── Status sub-tabs (Pending / Approved / Denied) ── */
+  .ap-substabs {
+    display: flex; gap: 0.4rem;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    margin-bottom: 0.85rem; padding-bottom: 2px;
+  }
+  .ap-substabs::-webkit-scrollbar { display: none; }
+  .ap-substab {
+    flex: 1 0 auto;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+    padding: 0.45rem 0.7rem; border-radius: 999px;
+    border: 1px solid #d4ddd6; background: #fff; color: #52796f;
+    font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600;
+    white-space: nowrap; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .ap-substab:active { transform: scale(0.97); }
+  .ap-substab.is-active.is-pending {
+    background: rgba(184,151,88,0.14); border-color: rgba(184,151,88,0.4); color: #7a5a28;
+  }
+  .ap-substab.is-active.is-approved {
+    background: rgba(82,121,111,0.14); border-color: rgba(82,121,111,0.4); color: #354f52;
+  }
+  .ap-substab.is-active.is-denied {
+    background: rgba(184,92,80,0.14); border-color: rgba(184,92,80,0.4); color: #7a3028;
+  }
+  .ap-substab-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 17px; padding: 0 5px; border-radius: 999px;
+    font-size: 0.6rem; font-weight: 700;
+    background: rgba(132,169,140,0.18); color: inherit;
+  }
+  .ap-substab.is-active .ap-substab-count { background: rgba(255,255,255,0.85); }
+
+  /* ── Status note (approved/denied card footer) ── */
+  .ap-status-note {
+    margin-top: 0.7rem; padding: 0.5rem 0.7rem; border-radius: 10px;
+    font-size: 0.74rem; line-height: 1.45;
+    display: flex; gap: 0.5rem; align-items: flex-start;
+  }
+  .ap-status-note.is-approved { background: rgba(82,121,111,0.1); color: #354f52; }
+  .ap-status-note.is-denied { background: rgba(184,92,80,0.1); color: #7a3028; }
+  .ap-status-note strong { font-weight: 700; margin-right: 0.25rem; }
+  .ap-status-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+  .ap-status-dot.is-approved { background: #52796f; }
+  .ap-status-dot.is-denied { background: #b85c50; }
 `;
 
 function formatDate(iso) {
@@ -376,6 +440,69 @@ function leaveEmployee(req) {
 function expenseEmployee(req) {
   return req?.employee || {};
 }
+// Overtime populates the employee onto `employeeId` (firstName/lastName/employeeId/email).
+function overtimeEmployee(req) {
+  const e = req?.employeeId;
+  return e && typeof e === 'object' ? e : {};
+}
+// Objectives (goals) populate the owner onto `userId`.
+function objectiveEmployee(req) {
+  const u = req?.userId;
+  return u && typeof u === 'object' ? u : {};
+}
+// Expense docs store the value on `totalAmount`; fall back to `amount` for any
+// older/alternative shape so the figure always renders.
+function expenseAmount(req) {
+  return req?.totalAmount != null ? req.totalAmount : req?.amount;
+}
+
+function formatHours(h) {
+  const n = Number(h);
+  if (Number.isNaN(n)) return '—';
+  return `${Number.isInteger(n) ? n : n.toFixed(1)}h`;
+}
+
+// Copy + subject for the reject/decline/send-back sheet, keyed by request kind.
+function rejectMeta(kind) {
+  switch (kind) {
+    case 'leave':
+      return {
+        title: 'Reject leave request',
+        fieldLabel: 'Reason for rejection',
+        placeholder: 'Let the employee know why this leave is being rejected…',
+        confirm: 'Reject',
+      };
+    case 'overtime':
+      return {
+        title: 'Reject overtime request',
+        fieldLabel: 'Reason for rejection',
+        placeholder: 'Let the employee know why this overtime is being rejected…',
+        confirm: 'Reject',
+      };
+    case 'objective':
+      return {
+        title: 'Send back objective',
+        fieldLabel: 'Reason for sending back',
+        placeholder: 'Let the employee know what to revise before resubmitting…',
+        confirm: 'Send back',
+      };
+    case 'expense':
+    default:
+      return {
+        title: 'Decline expense',
+        fieldLabel: 'Reason for decline',
+        placeholder: 'Let the employee know why this expense is being declined…',
+        confirm: 'Decline',
+      };
+  }
+}
+
+function rejectSubject(kind, req) {
+  if (kind === 'leave') return fullName(leaveEmployee(req));
+  if (kind === 'overtime') return fullName(overtimeEmployee(req));
+  if (kind === 'objective') return req?.title || fullName(objectiveEmployee(req));
+  return fullName(expenseEmployee(req));
+}
 
 function initials(emp) {
   const f = (emp?.firstName || '').charAt(0);
@@ -386,10 +513,42 @@ function fullName(emp) {
   return [emp?.firstName, emp?.lastName].filter(Boolean).join(' ').trim() || 'Unknown';
 }
 
+// Read a list endpoint that returns either `{ data: [...] }` or a bare array.
+// Pass `pick` to pull the array off a differently-shaped payload (e.g. overtime
+// endpoints return `{ overtime: [...] }`). Swallows errors so a failing status
+// list degrades to an empty tab (count 0) rather than tearing down the screen.
+async function fetchList(url, pick) {
+  try {
+    const { data } = await api.get(url);
+    const arr = pick ? pick(data) : (data?.data ?? data);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+// Move an objective between the pending/approved/denied buckets after an action,
+// applying `patch` (e.g. new approvalStatus / sentBackReason) to the moved item.
+function moveObjective(state, id, to, patch = {}) {
+  let moved = null;
+  const next = { pending: [], approved: [], denied: [] };
+  for (const key of ['pending', 'approved', 'denied']) {
+    for (const o of state[key] || []) {
+      if (o._id === id) moved = { ...o, ...patch };
+      else next[key].push(o);
+    }
+  }
+  if (moved) next[to] = [moved, ...next[to]];
+  return next;
+}
+
 export default function ManagerApprovals() {
   const [tab, setTab] = useState('leave');
-  const [leaves, setLeaves] = useState([]);
-  const [expenses, setExpenses] = useState([]);
+  const [statusTab, setStatusTab] = useState('pending');
+  const [leaves, setLeaves] = useState({ pending: [], approved: [], denied: [] });
+  const [expenses, setExpenses] = useState({ pending: [], approved: [], denied: [] });
+  const [overtime, setOvertime] = useState({ pending: [], approved: [], denied: [] });
+  const [objectives, setObjectives] = useState({ pending: [], approved: [], denied: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actingId, setActingId] = useState(null);
@@ -404,23 +563,79 @@ export default function ManagerApprovals() {
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
 
+  function onlyPending(list) {
+    return (Array.isArray(list) ? list : []).filter((e) => {
+      const s = (e?.status || '').toString().trim().toLowerCase();
+      return s === 'pending' || s === '';
+    });
+  }
+
   async function fetchAll() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await api.get('/manager/approvals/pending');
-      const payload = data?.data || data || {};
-      setLeaves(Array.isArray(payload.leaveRequests) ? payload.leaveRequests : []);
-      const allExpenses = Array.isArray(payload.expenses) ? payload.expenses : [];
-      setExpenses(allExpenses.filter((e) => {
-        const s = (e?.status || '').toString().trim().toLowerCase();
-        return s === 'pending' || s === '';
-      }));
+      // Pending is the primary payload — its failure surfaces the error state.
+      // Approved/denied lists load in parallel and fail soft to empty.
+      const [
+        pending, apprLeave, denLeave, apprExp, rejExp,
+        otPending, otApproved, otRejected,
+        objPending, objApproved, objSentBack,
+      ] = await Promise.all([
+        api.get('/manager/approvals/pending'),
+        fetchList('/leave/approved-requests'),
+        fetchList('/leave/denied-requests'),
+        fetchList('/expenses/approved'),
+        fetchList('/expenses/rejected'),
+        // Overtime — team-scoped; payload is `{ overtime: [...] }`.
+        fetchList('/overtime/team/pending', (d) => d?.overtime),
+        fetchList('/overtime/team/status/approved', (d) => d?.overtime),
+        fetchList('/overtime/team/status/rejected', (d) => d?.overtime),
+        // Objectives — only employee-set goals that need approval; `{ data: [...] }`.
+        fetchList('/goals/pending-approvals'),
+        fetchList('/goals/team-objectives?approvalStatus=approved'),
+        fetchList('/goals/team-objectives?approvalStatus=sent_back'),
+      ]);
+      const payload = pending?.data?.data || pending?.data || {};
+      setLeaves({
+        pending: Array.isArray(payload.leaveRequests) ? payload.leaveRequests : [],
+        approved: apprLeave,
+        denied: denLeave,
+      });
+      setExpenses({
+        pending: onlyPending(payload.expenses),
+        approved: apprExp,
+        denied: rejExp,
+      });
+      setOvertime({ pending: otPending, approved: otApproved, denied: otRejected });
+      setObjectives({ pending: objPending, approved: objApproved, denied: objSentBack });
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
+  }
+
+  // Refresh the approved/denied lists after an action so their counts stay live.
+  async function refreshLeaveHistory() {
+    const [approved, denied] = await Promise.all([
+      fetchList('/leave/approved-requests'),
+      fetchList('/leave/denied-requests'),
+    ]);
+    setLeaves((prev) => ({ ...prev, approved, denied }));
+  }
+  async function refreshExpenseHistory() {
+    const [approved, denied] = await Promise.all([
+      fetchList('/expenses/approved'),
+      fetchList('/expenses/rejected'),
+    ]);
+    setExpenses((prev) => ({ ...prev, approved, denied }));
+  }
+  async function refreshOvertimeHistory() {
+    const [approved, denied] = await Promise.all([
+      fetchList('/overtime/team/status/approved', (d) => d?.overtime),
+      fetchList('/overtime/team/status/rejected', (d) => d?.overtime),
+    ]);
+    setOvertime((prev) => ({ ...prev, approved, denied }));
   }
 
   useEffect(() => {
@@ -441,8 +656,9 @@ export default function ManagerApprovals() {
     setActingId(req._id);
     try {
       await api.patch(`/leave/approve/${req._id}`, { adminComment: '' });
-      setLeaves((prev) => prev.filter((r) => r._id !== req._id));
+      setLeaves((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
       flash('success', 'Leave approved');
+      refreshLeaveHistory();
     } catch (err) {
       flash('error', getErrorMessage(err));
     } finally {
@@ -459,8 +675,49 @@ export default function ManagerApprovals() {
     setActingId(req._id);
     try {
       await api.post(`/expenses/${req._id}/approve`, { approvalNotes: '' });
-      setExpenses((prev) => prev.filter((r) => r._id !== req._id));
+      setExpenses((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
       flash('success', 'Expense approved');
+      refreshExpenseHistory();
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function actOnOvertime(req, approve) {
+    if (!approve) {
+      openReject('overtime', req);
+      return;
+    }
+    if (!window.confirm('Approve this overtime request?')) return;
+    setActingId(req._id);
+    try {
+      await api.post(`/overtime/team/approve/${req._id}`);
+      setOvertime((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
+      flash('success', 'Overtime approved');
+      refreshOvertimeHistory();
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function actOnObjective(req, approve) {
+    if (!approve) {
+      // Objectives are "sent back" (with a reason) rather than rejected.
+      openReject('objective', req);
+      return;
+    }
+    if (!window.confirm('Approve this objective?')) return;
+    setActingId(req._id);
+    try {
+      await api.post(`/goals/${req._id}/approve-objective`);
+      setObjectives((prev) =>
+        moveObjective(prev, req._id, 'approved', { approvalStatus: 'approved', sentBackReason: null }),
+      );
+      flash('success', 'Objective approved');
     } catch (err) {
       flash('error', getErrorMessage(err));
     } finally {
@@ -489,12 +746,27 @@ export default function ManagerApprovals() {
     try {
       if (kind === 'leave') {
         await api.patch(`/leave/reject/${req._id}`, { rejectionReason: reason });
-        setLeaves((prev) => prev.filter((r) => r._id !== req._id));
+        setLeaves((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
         flash('success', 'Leave rejected');
+        refreshLeaveHistory();
+      } else if (kind === 'overtime') {
+        await api.post(`/overtime/team/reject/${req._id}`, { reason });
+        setOvertime((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
+        flash('success', 'Overtime rejected');
+        refreshOvertimeHistory();
+      } else if (kind === 'objective') {
+        // Objectives are "sent back" with a reason (no reject/decline).
+        await api.post(`/goals/${req._id}/send-back`, { reason });
+        setObjectives((prev) =>
+          moveObjective(prev, req._id, 'denied', { approvalStatus: 'sent_back', sentBackReason: reason }),
+        );
+        flash('success', 'Objective sent back');
       } else {
-        await api.post(`/expenses/${req._id}/decline`, { approvalNotes: reason });
-        setExpenses((prev) => prev.filter((r) => r._id !== req._id));
+        // Backend `declineExpense` reads `req.body.reason` (not approvalNotes).
+        await api.post(`/expenses/${req._id}/decline`, { reason });
+        setExpenses((prev) => ({ ...prev, pending: prev.pending.filter((r) => r._id !== req._id) }));
         flash('success', 'Expense declined');
+        refreshExpenseHistory();
       }
       setRejectTarget(null);
       setRejectReason('');
@@ -505,11 +777,17 @@ export default function ManagerApprovals() {
     }
   }
 
+  // Lists for the currently selected status tab.
+  const leaveList = leaves[statusTab] || [];
+  const expenseList = expenses[statusTab] || [];
+  const overtimeList = overtime[statusTab] || [];
+  const objectiveList = objectives[statusTab] || [];
+
   const { categoryOptions, employeeOptions, currencyOptions } = useMemo(() => {
     const cats = new Set();
     const emps = new Map();
     const ccys = new Set();
-    for (const e of expenses) {
+    for (const e of expenseList) {
       if (e?.category) cats.add(e.category);
       if (e?.currency) ccys.add(e.currency);
       const emp = expenseEmployee(e);
@@ -522,7 +800,7 @@ export default function ManagerApprovals() {
       employeeOptions: [...emps.values()].sort((a, b) => a.label.localeCompare(b.label)),
       currencyOptions: [...ccys].sort(sortAlpha),
     };
-  }, [expenses]);
+  }, [expenseList]);
 
   const min = minAmount.trim() === '' ? null : Number(minAmount);
   const max = maxAmount.trim() === '' ? null : Number(maxAmount);
@@ -535,7 +813,8 @@ export default function ManagerApprovals() {
     (amountActive ? 1 : 0);
 
   const filteredExpenses = useMemo(() => {
-    return expenses.filter((e) => {
+    return expenseList.filter((e) => {
+      const amount = expenseAmount(e);
       if (categoryFilters.length && !categoryFilters.includes(e.category)) return false;
       if (currencyFilters.length && !currencyFilters.includes(e.currency)) return false;
       if (employeeFilters.length) {
@@ -543,14 +822,40 @@ export default function ManagerApprovals() {
         const key = emp?._id || emp?.id || emp?.email || fullName(emp);
         if (!employeeFilters.includes(key)) return false;
       }
-      if (min != null && !Number.isNaN(min) && Number(e.amount) < min) return false;
-      if (max != null && !Number.isNaN(max) && Number(e.amount) > max) return false;
+      if (min != null && !Number.isNaN(min) && Number(amount) < min) return false;
+      if (max != null && !Number.isNaN(max) && Number(amount) > max) return false;
       return true;
     });
-  }, [expenses, categoryFilters, employeeFilters, currencyFilters, min, max]);
+  }, [expenseList, categoryFilters, employeeFilters, currencyFilters, min, max]);
 
-  const counts = useMemo(() => ({ leave: leaves.length, expense: expenses.length }), [leaves, expenses]);
-  const list = tab === 'leave' ? leaves : filteredExpenses;
+  // Counts for the status sub-tabs, scoped to the active type.
+  const source =
+    tab === 'leave' ? leaves
+      : tab === 'expense' ? expenses
+        : tab === 'overtime' ? overtime
+          : objectives;
+  const statusCounts = {
+    pending: (source.pending || []).length,
+    approved: (source.approved || []).length,
+    denied: (source.denied || []).length,
+  };
+  // Type-tab pills reflect the currently selected status.
+  const counts = {
+    leave: (leaves[statusTab] || []).length,
+    expense: (expenses[statusTab] || []).length,
+    overtime: (overtime[statusTab] || []).length,
+    objectives: (objectives[statusTab] || []).length,
+  };
+  const list =
+    tab === 'leave' ? leaveList
+      : tab === 'expense' ? filteredExpenses
+        : tab === 'overtime' ? overtimeList
+          : objectiveList;
+
+  // Copy helpers for the empty state.
+  const typeNoun = tab === 'objectives' ? 'objective' : tab;
+  const statusNoun =
+    statusTab === 'denied' ? (tab === 'objectives' ? 'sent back' : 'denied') : statusTab;
 
   function toggleFilter(setter, value) {
     setter((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -563,6 +868,13 @@ export default function ManagerApprovals() {
     setMinAmount('');
     setMaxAmount('');
   }
+
+  // Reset expense filters when the status/type context changes so a filter set
+  // on one tab doesn't silently hide items on another.
+  useEffect(() => {
+    clearExpFilters();
+    setExpFiltersOpen(false);
+  }, [statusTab, tab]);
 
   return (
     <>
@@ -577,7 +889,13 @@ export default function ManagerApprovals() {
             </svg>
           </div>
           <div className="ap-header-text">
-            <p className="ap-header-eyebrow">Pending Decisions</p>
+            <p className="ap-header-eyebrow">
+              {statusTab === 'approved'
+                ? 'Approved Requests'
+                : statusTab === 'denied'
+                  ? 'Denied Requests'
+                  : 'Pending Decisions'}
+            </p>
             <h1 className="ap-header-title">Approvals</h1>
           </div>
         </header>
@@ -597,9 +915,41 @@ export default function ManagerApprovals() {
           >
             Expense <span className="ap-tab-pill">{counts.expense}</span>
           </button>
+          <button
+            type="button"
+            className={`ap-tab ${tab === 'overtime' ? 'is-active' : ''}`}
+            onClick={() => setTab('overtime')}
+          >
+            Overtime <span className="ap-tab-pill">{counts.overtime}</span>
+          </button>
+          <button
+            type="button"
+            className={`ap-tab ${tab === 'objectives' ? 'is-active' : ''}`}
+            onClick={() => setTab('objectives')}
+          >
+            Objectives <span className="ap-tab-pill">{counts.objectives}</span>
+          </button>
         </div>
 
-        {tab === 'expense' && expenses.length > 0 && (
+        <div className="ap-substabs ap-anim">
+          {[
+            { id: 'pending', label: 'Pending', cls: 'is-pending' },
+            { id: 'approved', label: 'Approved', cls: 'is-approved' },
+            { id: 'denied', label: tab === 'objectives' ? 'Sent Back' : 'Denied', cls: 'is-denied' },
+          ].map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`ap-substab${statusTab === s.id ? ` is-active ${s.cls}` : ''}`}
+              onClick={() => setStatusTab(s.id)}
+            >
+              {s.label}
+              <span className="ap-substab-count">{statusCounts[s.id]}</span>
+            </button>
+          ))}
+        </div>
+
+        {tab === 'expense' && expenseList.length > 0 && (
           <>
             <div className="ap-filter-bar ap-anim">
               <button
@@ -737,48 +1087,52 @@ export default function ManagerApprovals() {
         ) : list.length === 0 ? (
           <div className="ap-empty ap-anim">
             <p className="ap-empty-title">
-              {tab === 'expense' && activeExpFilterCount > 0 ? 'No matches' : 'All caught up'}
+              {tab === 'expense' && activeExpFilterCount > 0
+                ? 'No matches'
+                : statusTab === 'pending'
+                  ? 'All caught up'
+                  : 'Nothing here'}
             </p>
             <p className="ap-empty-sub">
               {tab === 'expense' && activeExpFilterCount > 0
                 ? 'No expenses match the current filters.'
-                : `No pending ${tab === 'leave' ? 'leave' : 'expense'} requests right now.`}
+                : `No ${statusNoun} ${typeNoun} requests${statusTab === 'pending' ? ' right now' : ''}.`}
             </p>
           </div>
         ) : tab === 'leave' ? (
-          list.map((req) => <LeaveCard key={req._id} req={req} acting={actingId === req._id} onAct={actOnLeave} />)
+          list.map((req) => (
+            <LeaveCard key={req._id} req={req} status={statusTab} acting={actingId === req._id} onAct={actOnLeave} />
+          ))
+        ) : tab === 'expense' ? (
+          list.map((req) => (
+            <ExpenseCard key={req._id} req={req} status={statusTab} acting={actingId === req._id} onAct={actOnExpense} />
+          ))
+        ) : tab === 'overtime' ? (
+          list.map((req) => (
+            <OvertimeCard key={req._id} req={req} status={statusTab} acting={actingId === req._id} onAct={actOnOvertime} />
+          ))
         ) : (
-          list.map((req) => <ExpenseCard key={req._id} req={req} acting={actingId === req._id} onAct={actOnExpense} />)
+          list.map((req) => (
+            <ObjectiveCard key={req._id} req={req} status={statusTab} acting={actingId === req._id} onAct={actOnObjective} />
+          ))
         )}
       </div>
 
-      {rejectTarget && (
+      {rejectTarget && createPortal(
         <div className="ap-overlay" onClick={closeReject}>
           <div className="ap-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="ap-sheet-grip" />
-            <h2 className="ap-sheet-title">
-              {rejectTarget.kind === 'leave' ? 'Reject leave request' : 'Decline expense'}
-            </h2>
-            <p className="ap-sheet-sub">
-              {fullName(
-                rejectTarget.kind === 'leave'
-                  ? leaveEmployee(rejectTarget.req)
-                  : expenseEmployee(rejectTarget.req),
-              )}
-            </p>
+            <h2 className="ap-sheet-title">{rejectMeta(rejectTarget.kind).title}</h2>
+            <p className="ap-sheet-sub">{rejectSubject(rejectTarget.kind, rejectTarget.req)}</p>
             <form onSubmit={submitReject}>
               <div className="ap-field">
                 <label className="ap-field-label" htmlFor="ap-reject-reason">
-                  {rejectTarget.kind === 'leave' ? 'Reason for rejection' : 'Reason for decline'}
+                  {rejectMeta(rejectTarget.kind).fieldLabel}
                 </label>
                 <textarea
                   id="ap-reject-reason"
                   className="ap-textarea"
-                  placeholder={
-                    rejectTarget.kind === 'leave'
-                      ? 'Let the employee know why this leave is being rejected…'
-                      : 'Let the employee know why this expense is being declined…'
-                  }
+                  placeholder={rejectMeta(rejectTarget.kind).placeholder}
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
                   autoFocus
@@ -799,18 +1153,35 @@ export default function ManagerApprovals() {
                   disabled={rejectSubmitting || !rejectReason.trim()}
                 >
                   {rejectSubmitting ? <span className="ap-mini-spin" /> : null}
-                  {rejectTarget.kind === 'leave' ? 'Reject' : 'Decline'}
+                  {rejectMeta(rejectTarget.kind).confirm}
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
 }
 
-function LeaveCard({ req, acting, onAct }) {
+function StatusNote({ status, date, by, reason, verb }) {
+  const kind = status === 'approved' ? 'approved' : 'denied';
+  const label = verb || (status === 'approved' ? 'Approved' : 'Denied');
+  return (
+    <div className={`ap-status-note is-${kind}`}>
+      <span className={`ap-status-dot is-${kind}`} />
+      <span>
+        <strong>{label}</strong>
+        {date ? formatDate(date) : ''}
+        {by ? ` · by ${by}` : ''}
+        {reason ? <span style={{ display: 'block', marginTop: 3 }}>“{reason}”</span> : null}
+      </span>
+    </div>
+  );
+}
+
+function LeaveCard({ req, status = 'pending', acting, onAct }) {
   const emp = leaveEmployee(req);
   return (
     <div className="ap-card ap-anim">
@@ -826,29 +1197,38 @@ function LeaveCard({ req, acting, onAct }) {
         <div><strong>Dates:</strong>{formatDate(req.startDate)} → {formatDate(req.endDate)}</div>
         {req.reason && <div style={{ marginTop: 4 }}><strong>Reason:</strong>{req.reason}</div>}
       </div>
-      <div className="ap-actions">
-        <button
-          className="ap-btn ap-btn-reject"
-          onClick={() => onAct(req, false)}
-          disabled={acting}
-        >
-          {acting ? <span className="ap-mini-spin" /> : null}
-          Reject
-        </button>
-        <button
-          className="ap-btn ap-btn-approve"
-          onClick={() => onAct(req, true)}
-          disabled={acting}
-        >
-          {acting ? <span className="ap-mini-spin" /> : null}
-          Approve
-        </button>
-      </div>
+      {status === 'pending' ? (
+        <div className="ap-actions">
+          <button
+            className="ap-btn ap-btn-reject"
+            onClick={() => onAct(req, false)}
+            disabled={acting}
+          >
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Reject
+          </button>
+          <button
+            className="ap-btn ap-btn-approve"
+            onClick={() => onAct(req, true)}
+            disabled={acting}
+          >
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Approve
+          </button>
+        </div>
+      ) : (
+        <StatusNote
+          status={status}
+          date={status === 'approved' ? req.approvedAt : req.rejectedAt}
+          by={status === 'approved' && req.approvedBy ? fullName(req.approvedBy) : status === 'denied' && req.rejectedBy ? fullName(req.rejectedBy) : ''}
+          reason={status === 'denied' ? req.rejectionReason : ''}
+        />
+      )}
     </div>
   );
 }
 
-function ExpenseCard({ req, acting, onAct }) {
+function ExpenseCard({ req, status = 'pending', acting, onAct }) {
   const emp = expenseEmployee(req);
   return (
     <div className="ap-card ap-anim">
@@ -858,7 +1238,7 @@ function ExpenseCard({ req, acting, onAct }) {
           <div className="ap-name">{fullName(emp)}</div>
           <div className="ap-subtitle">{req.category || 'General'}</div>
         </div>
-        <span className="ap-type-pill is-expense">{formatAmount(req.amount, req.currency)}</span>
+        <span className="ap-type-pill is-expense">{formatAmount(expenseAmount(req), req.currency)}</span>
       </div>
       <div className="ap-card-details">
         {req.date && <div><strong>Date:</strong>{formatDate(req.date)}</div>}
@@ -866,24 +1246,123 @@ function ExpenseCard({ req, acting, onAct }) {
           <div style={{ marginTop: 4 }}><strong>Notes:</strong>{req.description || req.notes}</div>
         )}
       </div>
-      <div className="ap-actions">
-        <button
-          className="ap-btn ap-btn-reject"
-          onClick={() => onAct(req, false)}
-          disabled={acting}
-        >
-          {acting ? <span className="ap-mini-spin" /> : null}
-          Decline
-        </button>
-        <button
-          className="ap-btn ap-btn-approve"
-          onClick={() => onAct(req, true)}
-          disabled={acting}
-        >
-          {acting ? <span className="ap-mini-spin" /> : null}
-          Approve
-        </button>
+      {status === 'pending' ? (
+        <div className="ap-actions">
+          <button
+            className="ap-btn ap-btn-reject"
+            onClick={() => onAct(req, false)}
+            disabled={acting}
+          >
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Decline
+          </button>
+          <button
+            className="ap-btn ap-btn-approve"
+            onClick={() => onAct(req, true)}
+            disabled={acting}
+          >
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Approve
+          </button>
+        </div>
+      ) : (
+        <StatusNote
+          status={status}
+          date={status === 'approved' ? req.approvedAt : req.declinedAt}
+          by={status === 'approved' && req.approvedBy ? fullName(req.approvedBy) : status === 'denied' && req.declinedBy ? fullName(req.declinedBy) : ''}
+          reason={status === 'denied' ? req.declineReason : ''}
+        />
+      )}
+    </div>
+  );
+}
+
+function OvertimeCard({ req, status = 'pending', acting, onAct }) {
+  const emp = overtimeEmployee(req);
+  return (
+    <div className="ap-card ap-anim">
+      <div className="ap-card-top">
+        <span className="ap-avatar">{initials(emp)}</span>
+        <div className="ap-card-meta">
+          <div className="ap-name">{fullName(emp)}</div>
+          <div className="ap-subtitle">{emp.employeeId || emp.vtid || emp.email || '—'}</div>
+        </div>
+        <span className="ap-type-pill is-overtime">{formatHours(req.overtimeHours)} OT</span>
       </div>
+      <div className="ap-card-details">
+        {req.date && <div><strong>Date:</strong>{formatDate(req.date)}</div>}
+        <div style={{ marginTop: 4 }}>
+          <strong>Hours:</strong>{formatHours(req.workedHours)} worked · {formatHours(req.scheduledHours)} scheduled
+        </div>
+        {req.notes && <div style={{ marginTop: 4 }}><strong>Notes:</strong>{req.notes}</div>}
+      </div>
+      {status === 'pending' ? (
+        <div className="ap-actions">
+          <button className="ap-btn ap-btn-reject" onClick={() => onAct(req, false)} disabled={acting}>
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Reject
+          </button>
+          <button className="ap-btn ap-btn-approve" onClick={() => onAct(req, true)} disabled={acting}>
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Approve
+          </button>
+        </div>
+      ) : (
+        // Overtime writes the actor to approvedBy/approvedAt for BOTH outcomes;
+        // the outcome is carried by status (approved vs rejected).
+        <StatusNote
+          status={status}
+          date={req.approvedAt}
+          by={req.approvedBy ? fullName(req.approvedBy) : ''}
+          reason={status === 'denied' ? req.rejectionReason : ''}
+        />
+      )}
+    </div>
+  );
+}
+
+function ObjectiveCard({ req, status = 'pending', acting, onAct }) {
+  const emp = objectiveEmployee(req);
+  return (
+    <div className="ap-card ap-anim">
+      <div className="ap-card-top">
+        <span className="ap-avatar">{initials(emp)}</span>
+        <div className="ap-card-meta">
+          <div className="ap-name">{fullName(emp)}</div>
+          <div className="ap-subtitle">{req.category || 'Objective'}</div>
+        </div>
+        <span className="ap-type-pill is-objective">Objective</span>
+      </div>
+      <div className="ap-card-details">
+        <div><strong>Objective:</strong>{req.title || 'Untitled objective'}</div>
+        {req.description && (
+          <div style={{ marginTop: 4 }}><strong>Details:</strong>{req.description}</div>
+        )}
+        {(req.startDate || req.endDate || req.deadline) && (
+          <div style={{ marginTop: 4 }}>
+            <strong>Due:</strong>{formatDate(req.endDate || req.deadline)}
+          </div>
+        )}
+      </div>
+      {status === 'pending' ? (
+        <div className="ap-actions">
+          <button className="ap-btn ap-btn-reject" onClick={() => onAct(req, false)} disabled={acting}>
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Send back
+          </button>
+          <button className="ap-btn ap-btn-approve" onClick={() => onAct(req, true)} disabled={acting}>
+            {acting ? <span className="ap-mini-spin" /> : null}
+            Approve
+          </button>
+        </div>
+      ) : status === 'approved' ? (
+        <StatusNote status="approved" />
+      ) : (
+        <div className="ap-feedback-note">
+          <p className="ap-feedback-note-label">Sent back · manager feedback</p>
+          <p className="ap-feedback-note-text">{req.sentBackReason || 'No reason recorded.'}</p>
+        </div>
+      )}
     </div>
   );
 }

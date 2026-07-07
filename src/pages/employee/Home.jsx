@@ -15,7 +15,7 @@ const sections = [
     items: [
       { key: 'clock',        label: 'Clock In/Out',  icon: 'clock',    to: '/clock' },
       { key: 'shifts',       label: 'Shifts',        icon: 'shifts',   to: '/shifts' },
-      { key: 'calendar',     label: 'Calendar',      icon: 'calendar', to: '/calendar' },
+      { key: 'calendar',     label: 'Leaves',        icon: 'calendar', to: '/calendar' },
       { key: 'leave-bal',    label: 'Leave Balance', icon: 'leave',    to: '/leave-balance' },
       { key: 'time-history', label: 'Time History',  icon: 'history',  to: '/time-history' },
     ],

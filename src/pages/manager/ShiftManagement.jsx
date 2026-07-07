@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
+import ShiftMonthCalendar from '../../components/ShiftMonthCalendar';
 
 // Manager shift-management / team-rota overview.
 //   GET /rota/shift-assignments/all?startDate=&endDate=  → { data: [...] }
@@ -35,6 +37,31 @@ const styles = `
   .sm-refresh:disabled { opacity: 0.55; }
   .sm-refresh:not(:disabled):active { transform: scale(0.94); }
   .sm-refresh.is-busy svg { animation: sm-spin 0.8s linear infinite; }
+  .sm-header-actions { flex-shrink: 0; display: flex; align-items: center; gap: 0.4rem; }
+  .sm-header-assign {
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.3rem;
+    height: 36px; padding: 0 0.75rem; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #eef2ec;
+    font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600; letter-spacing: 0.01em;
+    box-shadow: 0 4px 12px rgba(53,79,82,0.2); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; transition: transform 0.12s;
+  }
+  .sm-header-assign:active { transform: scale(0.95); }
+  .sm-header-assign svg { flex-shrink: 0; }
+
+  /* ── View toggle (Week / Calendar) ── */
+  .sm-viewtabs { display: flex; gap: 0.4rem; margin-bottom: 0.85rem; }
+  .sm-viewtab {
+    flex: 1; padding: 0.5rem 0.4rem; border-radius: 12px;
+    font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em;
+    border: 1px solid rgba(132, 169, 140, 0.4); background: rgba(255, 255, 255, 0.6); color: #52796f;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sm-viewtab.is-active { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; border-color: transparent; }
+  .sm-viewtab:active { transform: scale(0.98); }
+  .sm-viewtab svg { flex-shrink: 0; }
 
   /* ── Week navigator ── */
   .sm-weeknav {
@@ -139,6 +166,176 @@ const styles = `
   }
   .sm-empty-week-title { font-size: 0.85rem; font-weight: 600; margin: 0; }
   .sm-empty-week-sub { font-size: 0.75rem; margin: 0.25rem 0 0; opacity: 0.85; }
+
+
+  /* ── Flash toast ── */
+  .sm-flash {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 70;
+    top: calc(env(safe-area-inset-top) + 0.6rem);
+    display: flex; align-items: center; gap: 0.5rem;
+    max-width: min(92vw, 420px); padding: 0.6rem 0.9rem; border-radius: 12px;
+    background: #2f6e34; color: #eaf3ea; font-size: 0.8rem; font-weight: 600;
+    box-shadow: 0 10px 28px rgba(47, 62, 70, 0.28);
+    animation: sm-fadeUp 0.28s cubic-bezier(0.22,1,0.36,1) both;
+  }
+  .sm-flash svg { flex-shrink: 0; }
+
+  /* ── Assign modal ── */
+  .sm-modal-overlay {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(47, 62, 70, 0.55);
+    display: flex; align-items: flex-end; justify-content: center;
+    padding: 0; -webkit-tap-highlight-color: transparent;
+  }
+  .sm-modal {
+    width: 100%; max-width: 480px; max-height: 92vh; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #f7f8f6; border-radius: 20px 20px 0 0;
+    padding: 0.4rem 1.1rem calc(env(safe-area-inset-bottom) + 1.1rem);
+    box-shadow: 0 -18px 48px rgba(47, 62, 70, 0.28);
+    animation: sm-fadeUp 0.28s cubic-bezier(0.22,1,0.36,1) both;
+  }
+  .sm-modal-grab { width: 38px; height: 4px; border-radius: 999px; background: #cdd6cf; margin: 0.55rem auto 0.4rem; }
+  .sm-modal-head { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.35rem 0 0.7rem; }
+  .sm-modal-head-text { flex: 1; min-width: 0; }
+  .sm-modal-title { font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; font-weight: 400; color: #2f3e46; margin: 0; line-height: 1.1; }
+  .sm-modal-sub { font-size: 0.72rem; color: #7a8e84; margin: 0.15rem 0 0; }
+  .sm-close {
+    flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px;
+    border: 1px solid rgba(212, 221, 214, 0.9); background: #fff; color: #52796f;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .sm-close:active { transform: scale(0.94); }
+
+  .sm-field { margin-bottom: 0.75rem; }
+  .sm-field-label { display: block; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #52796f; margin: 0 0 0.35rem 0.1rem; }
+  .sm-field-req { color: #c0756a; }
+  .sm-input, .sm-select, .sm-textarea {
+    width: 100%; box-sizing: border-box; padding: 0.65rem 0.75rem; border-radius: 12px;
+    border: 1.5px solid #d4ddd6; background: #fff; color: #2f3e46;
+    font-family: 'DM Sans', sans-serif; font-size: 16px; -webkit-appearance: none; appearance: none;
+    -webkit-tap-highlight-color: transparent; transition: border-color 0.18s, box-shadow 0.18s;
+  }
+  .sm-input:focus, .sm-select:focus, .sm-textarea:focus { outline: none; border-color: #52796f; box-shadow: 0 0 0 3px rgba(82, 121, 111, 0.12); }
+  .sm-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2352796f' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 0.7rem center; padding-right: 2.2rem;
+  }
+  .sm-textarea { resize: vertical; min-height: 62px; }
+  .sm-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+  .sm-hint { font-size: 0.66rem; color: #8a9a90; margin: 0.3rem 0.1rem 0; }
+
+  .sm-modal-error {
+    display: flex; gap: 0.5rem; align-items: flex-start;
+    padding: 0.6rem 0.75rem; border-radius: 12px; margin-bottom: 0.75rem;
+    background: rgba(192, 117, 106, 0.1); border: 1px solid rgba(192, 117, 106, 0.35);
+    color: #8a352b; font-size: 0.76rem; font-weight: 500;
+  }
+  .sm-modal-error svg { flex-shrink: 0; margin-top: 1px; }
+
+  .sm-modal-actions { display: flex; gap: 0.6rem; margin-top: 0.35rem; }
+  .sm-btn {
+    flex: 1; padding: 0.75rem; border-radius: 12px; font-family: 'DM Sans', sans-serif;
+    font-size: 0.84rem; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; transition: transform 0.12s;
+  }
+  .sm-btn:active { transform: scale(0.98); }
+  .sm-btn:disabled { opacity: 0.6; cursor: default; }
+  .sm-btn-secondary { border: 1.5px solid #d4ddd6; background: #fff; color: #52796f; }
+  .sm-btn-primary { border: none; background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #eef2ec; }
+  .sm-mini-spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.45); border-top-color: #fff; animation: sm-spin 0.7s linear infinite; }
+
+  /* ── Custom date field + calendar (dd/mm/yyyy) ── */
+  .sm-date { position: relative; }
+  .sm-date-trigger {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+    text-align: left; cursor: pointer;
+  }
+  .sm-date-trigger:disabled { opacity: 0.6; cursor: default; }
+  .sm-date-trigger svg { flex-shrink: 0; color: #52796f; }
+  .sm-date-val { color: #2f3e46; }
+  .sm-date-ph { color: #9aa8a0; }
+  .sm-cal {
+    position: absolute; z-index: 30; top: calc(100% + 6px); left: 0;
+    width: 264px; max-width: calc(100vw - 2.4rem);
+    background: #fff; border: 1px solid rgba(212, 221, 214, 0.9); border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(47, 62, 70, 0.2); padding: 0.7rem;
+    animation: sm-fadeUp 0.16s ease both;
+  }
+  .sm-cal.is-right { left: auto; right: 0; }
+  .sm-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+  .sm-cal-title { font-size: 0.82rem; font-weight: 700; color: #2f3e46; }
+  .sm-cal-nav {
+    width: 30px; height: 30px; border-radius: 8px; border: 1px solid rgba(212, 221, 214, 0.9);
+    background: #fff; color: #354f52; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sm-cal-nav:active { background: #f1f4f0; }
+  .sm-cal-dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 3px; }
+  .sm-cal-dow span { text-align: center; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #9aa8a0; padding: 2px 0; }
+  .sm-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .sm-cal-empty { height: 34px; }
+  .sm-cal-day {
+    height: 34px; display: flex; align-items: center; justify-content: center;
+    border: none; background: transparent; border-radius: 8px; cursor: pointer;
+    font-family: 'DM Sans', sans-serif; font-size: 0.8rem; color: #2f3e46;
+    -webkit-tap-highlight-color: transparent; transition: background 0.12s;
+  }
+  .sm-cal-day:not(:disabled):active { background: #e6ece7; }
+  .sm-cal-day.is-weekend { color: #b3bdb5; }
+  .sm-cal-day.is-today { box-shadow: inset 0 0 0 1.5px rgba(82, 121, 111, 0.5); }
+  .sm-cal-day.is-selected { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #fff; }
+  .sm-cal-day.is-selected.is-today { box-shadow: none; }
+  .sm-cal-day:disabled { color: #d5dbd6; cursor: default; }
+  .sm-cal-foot { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
+  .sm-cal-today {
+    border: none; background: transparent; color: #52796f; font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem; font-weight: 600; cursor: pointer; padding: 0.25rem 0.4rem; border-radius: 7px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .sm-cal-today:active { background: #f1f4f0; }
+
+  /* ── Employee picker (searchable, in-app) ── */
+  .sm-picker-overlay {
+    position: fixed; inset: 0; z-index: 75;
+    background: rgba(47, 62, 70, 0.5);
+    display: flex; align-items: flex-end; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .sm-picker-sheet {
+    width: 100%; max-width: 480px; max-height: 78vh; display: flex; flex-direction: column;
+    background: #f7f8f6; border-radius: 20px 20px 0 0;
+    padding: 0.4rem 1rem calc(env(safe-area-inset-bottom) + 0.8rem);
+    box-shadow: 0 -18px 48px rgba(47, 62, 70, 0.28);
+    animation: sm-fadeUp 0.24s cubic-bezier(0.22,1,0.36,1) both;
+  }
+  .sm-picker-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0 0.6rem; }
+  .sm-picker-title { flex: 1; min-width: 0; font-family: 'Cormorant Garamond', serif; font-size: 1.2rem; font-weight: 400; color: #2f3e46; margin: 0; }
+  .sm-picker-search { position: relative; margin-bottom: 0.55rem; }
+  .sm-picker-search svg { position: absolute; left: 0.7rem; top: 50%; transform: translateY(-50%); color: #84a98c; pointer-events: none; }
+  .sm-picker-search input {
+    width: 100%; box-sizing: border-box; padding: 0.6rem 0.75rem 0.6rem 2.2rem; border-radius: 12px;
+    border: 1.5px solid #d4ddd6; background: #fff; font-family: 'DM Sans', sans-serif; font-size: 16px; color: #2f3e46;
+    -webkit-appearance: none; appearance: none; -webkit-tap-highlight-color: transparent;
+    transition: border-color 0.18s, box-shadow 0.18s;
+  }
+  .sm-picker-search input::placeholder { color: #a7b6ac; }
+  .sm-picker-search input:focus { outline: none; border-color: #52796f; box-shadow: 0 0 0 3px rgba(82, 121, 111, 0.12); }
+  .sm-picker-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 0.25rem; }
+  .sm-picker-item {
+    display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left;
+    padding: 0.55rem 0.5rem; border-radius: 12px; border: none; background: transparent;
+    font-family: 'DM Sans', sans-serif; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    transition: background 0.14s;
+  }
+  .sm-picker-item:active { background: #eef2ef; }
+  .sm-picker-item.is-sel { background: rgba(82, 121, 111, 0.1); }
+  .sm-picker-av { width: 34px; height: 34px; font-size: 0.72rem; }
+  .sm-picker-item-text { flex: 1; min-width: 0; }
+  .sm-picker-item-name { display: block; font-size: 0.86rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sm-picker-item-sub { display: block; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .sm-picker-check { flex-shrink: 0; color: #52796f; }
+  .sm-picker-empty { padding: 1.4rem 0.5rem; text-align: center; font-size: 0.78rem; color: #9aa8a0; font-style: italic; }
 `;
 
 function toYMD(d) {
@@ -234,14 +431,281 @@ function shiftStartMinutes(shift) {
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export default function ManagerShiftManagement() {
+// Mirror the web rota planner's assign-shift options (RotaShiftManagement.jsx).
+const LOCATIONS = [
+  { value: 'Office', label: 'Work From Office' },
+  { value: 'Home', label: 'Work From Home' },
+  { value: 'Field', label: 'Field' },
+  { value: 'Client Site', label: 'Client Site' },
+];
+const WORK_TYPES = [
+  { value: 'Regular', label: 'Regular' },
+  { value: 'Overtime', label: 'Overtime' },
+  { value: 'Weekend overtime', label: 'Weekend Overtime' },
+  { value: 'Client side overtime', label: 'Client Side Overtime' },
+];
+
+// Weekends (Sat/Sun) are mandatory holidays on this backend and are excluded
+// from shift assignment — same rule the web planner enforces.
+function weekdaysInRange(startYMD, endYMD) {
+  const dates = [];
+  let cur = new Date(`${startYMD}T00:00:00`);
+  const end = new Date(`${endYMD}T00:00:00`);
+  if (Number.isNaN(cur.getTime()) || Number.isNaN(end.getTime()) || cur > end) return dates;
+  for (let guard = 0; cur <= end && guard < 400; guard += 1) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) dates.push(toYMD(cur));
+    cur = addDays(cur, 1);
+  }
+  return dates;
+}
+
+function makeGroupId() {
+  if (typeof crypto !== 'undefined' && crypto?.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// ── Custom date field (displays dd/mm/yyyy, opens an in-app calendar) ──
+const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+const CAL_DOW = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+
+function formatDMY(ymd) {
+  const m = YMD_RE.exec(ymd || '');
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
+
+// Grid of cells for a month, Monday-first, with leading blanks for alignment.
+function buildMonthGrid(year, month) {
+  const first = new Date(year, month, 1);
+  const startDow = (first.getDay() + 6) % 7; // Mon=0 … Sun=6
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayYMD = toYMD(new Date());
+  const cells = [];
+  for (let i = 0; i < startDow; i += 1) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d += 1) {
+    const date = new Date(year, month, d);
+    const dow = date.getDay();
+    const ymd = toYMD(date);
+    cells.push({ day: d, ymd, isToday: ymd === todayYMD, isWeekend: dow === 0 || dow === 6 });
+  }
+  return cells;
+}
+
+function DateField({ id, value, min, disabled, alignRight, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState(() => {
+    const base = YMD_RE.test(value || '') ? new Date(`${value}T00:00:00`) : new Date();
+    return { year: base.getFullYear(), month: base.getMonth() };
+  });
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('touchstart', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('touchstart', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const grid = useMemo(() => buildMonthGrid(view.year, view.month), [view.year, view.month]);
+  const minYMD = YMD_RE.test(min || '') ? min : null;
+
+  function toggle() {
+    if (disabled) return;
+    if (!open && YMD_RE.test(value || '')) {
+      const d = new Date(`${value}T00:00:00`);
+      setView({ year: d.getFullYear(), month: d.getMonth() });
+    }
+    setOpen((o) => !o);
+  }
+
+  function step(delta) {
+    setView((v) => {
+      const m = v.month + delta;
+      if (m < 0) return { year: v.year - 1, month: 11 };
+      if (m > 11) return { year: v.year + 1, month: 0 };
+      return { year: v.year, month: m };
+    });
+  }
+
+  function pick(ymd) {
+    onChange(ymd);
+    setOpen(false);
+  }
+
+  return (
+    <div className="sm-date" ref={ref}>
+      <button type="button" id={id} className="sm-input sm-date-trigger" onClick={toggle}
+        disabled={disabled} aria-haspopup="dialog" aria-expanded={open}>
+        <span className={value ? 'sm-date-val' : 'sm-date-ph'}>{value ? formatDMY(value) : 'dd/mm/yyyy'}</span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+        </svg>
+      </button>
+      {open && (
+        <div className={`sm-cal${alignRight ? ' is-right' : ''}`} role="dialog" aria-label="Choose a date">
+          <div className="sm-cal-head">
+            <button type="button" className="sm-cal-nav" onClick={() => step(-1)} aria-label="Previous month">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <span className="sm-cal-title">{MONTH_NAMES[view.month]} {view.year}</span>
+            <button type="button" className="sm-cal-nav" onClick={() => step(1)} aria-label="Next month">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+          <div className="sm-cal-dow">
+            {CAL_DOW.map((d) => <span key={d}>{d}</span>)}
+          </div>
+          <div className="sm-cal-grid">
+            {grid.map((cell, i) => {
+              if (!cell) return <span key={`e${i}`} className="sm-cal-empty" />;
+              const dayDisabled = minYMD ? cell.ymd < minYMD : false;
+              const cls = ['sm-cal-day'];
+              if (value === cell.ymd) cls.push('is-selected');
+              if (cell.isToday) cls.push('is-today');
+              if (cell.isWeekend) cls.push('is-weekend');
+              return (
+                <button key={cell.ymd} type="button" className={cls.join(' ')}
+                  onClick={() => pick(cell.ymd)} disabled={dayDisabled}>
+                  {cell.day}
+                </button>
+              );
+            })}
+          </div>
+          <div className="sm-cal-foot">
+            <button type="button" className="sm-cal-today" onClick={() => {
+              const t = toYMD(new Date());
+              if (!(minYMD && t < minYMD)) pick(t);
+            }}>Today</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function memberName(m) {
+  return [m.firstName, m.lastName].filter(Boolean).join(' ').trim() || m.email || 'Unnamed';
+}
+
+// Searchable, in-app employee picker. Replaces a native <select> so the roster
+// (org-wide for admins) stays usable on mobile and matches the modal's custom
+// date fields. The sheet is portalled to <body> — the swipe-back stage
+// transform clips position:fixed otherwise.
+function EmployeePicker({ members, loading, error, value, onChange, disabled, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const selected = useMemo(() => members.find((m) => m._id === value) || null, [members, value]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) =>
+      memberName(m).toLowerCase().includes(q) || (m.email || '').toLowerCase().includes(q));
+  }, [members, query]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  const label = loading ? 'Loading…' : error ? 'Team unavailable' : selected ? memberName(selected) : placeholder;
+  const triggerDisabled = disabled || loading || !!error || members.length === 0;
+
+  function choose(id) {
+    onChange(id);
+    setOpen(false);
+    setQuery('');
+  }
+
+  return (
+    <>
+      <button type="button" id="asg-emp" className="sm-input sm-date-trigger"
+        onClick={() => !triggerDisabled && setOpen(true)} disabled={triggerDisabled}
+        aria-haspopup="dialog" aria-expanded={open}>
+        <span className={selected ? 'sm-date-val' : 'sm-date-ph'}>{label}</span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && createPortal(
+        <div className="sm-picker-overlay" onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
+          <div className="sm-picker-sheet" role="dialog" aria-modal="true" aria-label="Select an employee">
+            <div className="sm-modal-grab" />
+            <div className="sm-picker-head">
+              <h3 className="sm-picker-title">{placeholder}</h3>
+              <button type="button" className="sm-close" onClick={() => setOpen(false)} aria-label="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+            {members.length > 6 && (
+              <div className="sm-picker-search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
+                </svg>
+                <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search name or email…" autoCapitalize="none" autoCorrect="off" autoFocus />
+              </div>
+            )}
+            <div className="sm-picker-list">
+              {filtered.length === 0 ? (
+                <div className="sm-picker-empty">No matching employees.</div>
+              ) : filtered.map((m) => (
+                <button key={m._id} type="button"
+                  className={`sm-picker-item${m._id === value ? ' is-sel' : ''}`}
+                  onClick={() => choose(m._id)}>
+                  <span className="sm-avatar sm-picker-av">{initials(memberName(m))}</span>
+                  <span className="sm-picker-item-text">
+                    <span className="sm-picker-item-name">{memberName(m)}</span>
+                    {m.email && <span className="sm-picker-item-sub">{m.email}</span>}
+                  </span>
+                  {m._id === value && (
+                    <svg className="sm-picker-check" width="17" height="17" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// Shared by /manager/shifts (team scope) and /admin/shifts (org scope). Scope
+// only changes which roster the assign picker pulls: admins pick from the whole
+// org, managers from their reporting tree.
+export default function ManagerShiftManagement({ scope = 'team' }) {
+  const isOrg = scope === 'org';
   const navigate = useNavigate();
+  const [view, setView] = useState('week'); // 'week' | 'calendar'
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [flash, setFlash] = useState('');
 
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart]);
   const todayYMD = toYMD(startOfWeek(new Date())) === toYMD(weekStart)
@@ -270,6 +734,23 @@ export default function ManagerShiftManagement() {
     fetchShifts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
+
+  useEffect(() => {
+    if (!flash) return undefined;
+    const t = setTimeout(() => setFlash(''), 3400);
+    return () => clearTimeout(t);
+  }, [flash]);
+
+  // After a successful assignment, jump the view to the week the shift starts
+  // in (so the manager sees it appear) and refresh. Changing weekStart refetches
+  // via the effect above; if it's already the visible week, refetch explicitly.
+  function handleAssigned(count, startYMD) {
+    setAssignOpen(false);
+    setFlash(`${count} shift${count === 1 ? '' : 's'} assigned`);
+    const target = startOfWeek(new Date(`${startYMD}T00:00:00`));
+    if (toYMD(target) === toYMD(weekStart)) fetchShifts(true);
+    else setWeekStart(target);
+  }
 
   const filteredShifts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -328,6 +809,43 @@ export default function ManagerShiftManagement() {
   const isThisWeek = relLabel === 'This week';
   const hasAnyShift = days.some((d) => d.items.length > 0);
 
+  // Month-calendar view: team-wide feed for the visible range, and a clickable
+  // day card that mirrors the week list.
+  async function monthFetcher(startYMD, endYMD) {
+    const { data } = await api.get('/rota/shift-assignments/all', {
+      params: { startDate: startYMD, endDate: endYMD },
+    });
+    return data?.data || (Array.isArray(data) ? data : []);
+  }
+
+  function renderCalendarShift(s) {
+    const emp = shiftEmployee(s);
+    const start = formatTime(s.startTime);
+    const end = formatTime(s.endTime);
+    const status = s.status || 'Scheduled';
+    const locRole = [s.location, s.shiftType || s.role].filter(Boolean).join(' · ');
+    return (
+      <button
+        type="button"
+        className={`sm-card ${cardTone(status)}`}
+        onClick={() => emp.id && navigate(`/employees/${emp.id}`)}
+      >
+        <span className="sm-avatar">{initials(emp.name)}</span>
+        <span className="sm-body">
+          <span className="sm-name">{emp.name}</span>
+          <span className="sm-meta">
+            <span className="sm-time">{start && end ? `${start} – ${end}` : start || 'Time TBC'}</span>
+            {locRole && <span className="sm-loc">· {locRole}</span>}
+          </span>
+        </span>
+        <span className={`sm-status ${statusClass(status)}`}>
+          <span className="sm-status-dot" />
+          {status}
+        </span>
+      </button>
+    );
+  }
+
   return (
     <>
       <style>{styles}</style>
@@ -343,21 +861,68 @@ export default function ManagerShiftManagement() {
             <p className="sm-header-eyebrow">Team Rota</p>
             <h1 className="sm-header-title">Shift Management</h1>
           </div>
-          <button
-            type="button"
-            className={`sm-refresh${refreshing ? ' is-busy' : ''}`}
-            onClick={() => fetchShifts(true)}
-            disabled={loading || refreshing}
-            aria-label="Refresh rota"
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M23 4v6h-6M1 20v-6h6" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          </button>
+          <div className="sm-header-actions">
+            {!(view === 'week' && error) && (
+              <button type="button" className="sm-header-assign" onClick={() => setAssignOpen(true)} aria-label="Assign a shift">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Assign shift
+              </button>
+            )}
+            <button
+              type="button"
+              className={`sm-refresh${refreshing ? ' is-busy' : ''}`}
+              onClick={() => fetchShifts(true)}
+              disabled={loading || refreshing}
+              aria-label="Refresh rota"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </div>
         </header>
 
+        <div className="sm-viewtabs sm-anim">
+          <button
+            type="button"
+            className={`sm-viewtab${view === 'week' ? ' is-active' : ''}`}
+            onClick={() => setView('week')}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+            Week
+          </button>
+          <button
+            type="button"
+            className={`sm-viewtab${view === 'calendar' ? ' is-active' : ''}`}
+            onClick={() => setView('calendar')}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+            </svg>
+            Calendar
+          </button>
+        </div>
+
+        {view === 'calendar' ? (
+          <div className="sm-anim">
+            <ShiftMonthCalendar
+              fetcher={monthFetcher}
+              renderShift={renderCalendarShift}
+              emptyText="No one is scheduled on this day."
+            />
+          </div>
+        ) : (
+        <>
         <div className="sm-weeknav sm-anim">
           <button type="button" className="sm-weeknav-btn" onClick={() => setWeekStart((w) => addDays(w, -7))} aria-label="Previous week">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
@@ -480,7 +1045,288 @@ export default function ManagerShiftManagement() {
             );
           })
         )}
+        </>
+        )}
       </div>
+
+      {flash && createPortal(
+        <div className="sm-flash" role="status">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+          {flash}
+        </div>,
+        document.body,
+      )}
+
+      {assignOpen && (
+        <AssignShiftModal
+          isOrg={isOrg}
+          defaultDate={todayYMD || toYMD(weekStart)}
+          onClose={() => setAssignOpen(false)}
+          onAssigned={handleAssigned}
+        />
+      )}
     </>
+  );
+}
+
+function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
+  const [members, setMembers] = useState([]);
+  const [membersLoading, setMembersLoading] = useState(true);
+  const [membersError, setMembersError] = useState(null);
+
+  const [employeeId, setEmployeeId] = useState('');
+  const [startDate, setStartDate] = useState(defaultDate);
+  const [endDate, setEndDate] = useState(defaultDate);
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('17:00');
+  const [location, setLocation] = useState('Office');
+  const [workType, setWorkType] = useState('Regular');
+  const [breakDuration, setBreakDuration] = useState('60');
+  const [shiftName, setShiftName] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setMembersLoading(true);
+      setMembersError(null);
+      try {
+        // Admin scope pulls the whole org; manager scope pulls their reporting
+        // tree. Mirrors the roster switch used by Calendar / Objectives.
+        const url = isOrg
+          ? '/employees?includeAdmins=true'
+          : '/manager/team/members?includeIndirect=true';
+        const { data } = await api.get(url);
+        const list = data?.data || data?.employees || (Array.isArray(data) ? data : []);
+        if (!cancelled) setMembers(Array.isArray(list) ? list : []);
+      } catch (err) {
+        if (!cancelled) setMembersError(getErrorMessage(err));
+      } finally {
+        if (!cancelled) setMembersLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOrg]);
+
+  // Keep the end date on/after the start date as the manager changes it.
+  function onStartDateChange(v) {
+    setStartDate(v);
+    if (v && endDate && endDate < v) setEndDate(v);
+  }
+
+  const dayCount = useMemo(() => weekdaysInRange(startDate, endDate).length, [startDate, endDate]);
+
+  async function handleSubmit() {
+    setError(null);
+    if (!employeeId) return setError('Please select an employee.');
+    if (!startDate || !endDate) return setError('Please choose a date range.');
+    if (endDate < startDate) return setError('The end date must be on or after the start date.');
+    if (!startTime || !endTime) return setError('Please set a start and end time.');
+    if (endTime <= startTime) return setError('The end time must be after the start time.');
+
+    const dates = weekdaysInRange(startDate, endDate);
+    if (dates.length === 0) return setError('No weekdays in that range — weekends are excluded from shifts.');
+
+    setSaving(true);
+    const groupId = makeGroupId();
+    const brk = Number(breakDuration);
+    const payloadBase = {
+      shiftName: shiftName.trim(),
+      startTime,
+      endTime,
+      location,
+      workType,
+      breakDuration: Number.isFinite(brk) && brk >= 0 ? brk : 0,
+      notes: notes.trim(),
+    };
+
+    let ok = 0;
+    let firstError = null;
+    // One shift per weekday, sendEmail:false — then a single summary email
+    // for the whole range (mirrors the web planner to avoid one email per day).
+    for (const date of dates) {
+      try {
+        const { data } = await api.post('/rota/assign-shift', {
+          ...payloadBase,
+          employeeId,
+          date,
+          groupId,
+          startDate,
+          endDate,
+          sendEmail: false,
+        });
+        if (data?.success !== false) ok += 1;
+      } catch (err) {
+        if (!firstError) firstError = getErrorMessage(err);
+      }
+    }
+
+    if (ok > 0) {
+      try {
+        await api.post('/rota/assign-shift/notify', {
+          employeeId,
+          shiftName: payloadBase.shiftName,
+          startDate,
+          endDate,
+          startTime,
+          endTime,
+          location,
+          count: ok,
+        });
+      } catch {
+        // summary email is non-fatal — the shifts are already saved.
+      }
+      onAssigned(ok, startDate);
+      return;
+    }
+
+    setSaving(false);
+    setError(firstError || 'Could not assign the shift. Please try again.');
+  }
+
+  return createPortal(
+    <div className="sm-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <div className="sm-modal" role="dialog" aria-modal="true" aria-label="Assign a shift">
+        <div className="sm-modal-grab" />
+        <div className="sm-modal-head">
+          <div className="sm-modal-head-text">
+            <h2 className="sm-modal-title">Assign a shift</h2>
+            <p className="sm-modal-sub">
+              {isOrg ? 'Schedule a shift for any employee.' : 'Schedule a shift for a member of your team.'}
+            </p>
+          </div>
+          <button type="button" className="sm-close" onClick={onClose} disabled={saving} aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {error && (
+          <div className="sm-modal-error">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+            </svg>
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="sm-field">
+          <label className="sm-field-label" htmlFor="asg-emp">Employee <span className="sm-field-req">*</span></label>
+          <EmployeePicker
+            members={members}
+            loading={membersLoading}
+            error={membersError}
+            value={employeeId}
+            onChange={setEmployeeId}
+            disabled={saving}
+            placeholder={isOrg ? 'Select an employee…' : 'Select a team member…'}
+          />
+          {membersError && <p className="sm-hint">{membersError}</p>}
+          {!membersLoading && !membersError && members.length === 0 && (
+            <p className="sm-hint">
+              {isOrg ? 'No employees available to assign shifts to.' : 'You have no team members to assign shifts to.'}
+            </p>
+          )}
+        </div>
+
+        <div className="sm-field">
+          <div className="sm-row">
+            <div>
+              <label className="sm-field-label" htmlFor="asg-start">Start date <span className="sm-field-req">*</span></label>
+              <DateField id="asg-start" value={startDate}
+                onChange={onStartDateChange} disabled={saving} />
+            </div>
+            <div>
+              <label className="sm-field-label" htmlFor="asg-end">End date <span className="sm-field-req">*</span></label>
+              <DateField id="asg-end" value={endDate} min={startDate} alignRight
+                onChange={setEndDate} disabled={saving} />
+            </div>
+          </div>
+          {startDate && endDate && (
+            <p className="sm-hint">
+              {dayCount === 0
+                ? 'No weekdays selected — weekends (Sat/Sun) are excluded.'
+                : `${dayCount} weekday${dayCount === 1 ? '' : 's'} · weekends excluded`}
+            </p>
+          )}
+        </div>
+
+        <div className="sm-field">
+          <div className="sm-row">
+            <div>
+              <label className="sm-field-label" htmlFor="asg-stime">Start time <span className="sm-field-req">*</span></label>
+              <input id="asg-stime" type="time" className="sm-input" value={startTime}
+                onChange={(e) => setStartTime(e.target.value)} disabled={saving} />
+            </div>
+            <div>
+              <label className="sm-field-label" htmlFor="asg-etime">End time <span className="sm-field-req">*</span></label>
+              <input id="asg-etime" type="time" className="sm-input" value={endTime}
+                onChange={(e) => setEndTime(e.target.value)} disabled={saving} />
+            </div>
+          </div>
+        </div>
+
+        <div className="sm-field">
+          <div className="sm-row">
+            <div>
+              <label className="sm-field-label" htmlFor="asg-loc">Location</label>
+              <select id="asg-loc" className="sm-select" value={location}
+                onChange={(e) => setLocation(e.target.value)} disabled={saving}>
+                {LOCATIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="sm-field-label" htmlFor="asg-wt">Work type</label>
+              <select id="asg-wt" className="sm-select" value={workType}
+                onChange={(e) => setWorkType(e.target.value)} disabled={saving}>
+                {WORK_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="sm-field">
+          <div className="sm-row">
+            <div>
+              <label className="sm-field-label" htmlFor="asg-brk">Break (min)</label>
+              <input id="asg-brk" type="number" inputMode="numeric" min="0" className="sm-input"
+                value={breakDuration} onChange={(e) => setBreakDuration(e.target.value)} disabled={saving} />
+            </div>
+            <div>
+              <label className="sm-field-label" htmlFor="asg-name">Shift name</label>
+              <input id="asg-name" type="text" className="sm-input" value={shiftName}
+                placeholder="Optional" onChange={(e) => setShiftName(e.target.value)} disabled={saving} />
+            </div>
+          </div>
+        </div>
+
+        <div className="sm-field">
+          <label className="sm-field-label" htmlFor="asg-notes">Notes</label>
+          <textarea id="asg-notes" className="sm-textarea" rows="2" value={notes}
+            placeholder="Optional note for this shift…" onChange={(e) => setNotes(e.target.value)} disabled={saving} />
+        </div>
+
+        <div className="sm-modal-actions">
+          <button type="button" className="sm-btn sm-btn-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="button" className="sm-btn sm-btn-primary" onClick={handleSubmit}
+            disabled={saving || membersLoading || !employeeId || dayCount === 0}>
+            {saving ? <span className="sm-mini-spin" /> : null}
+            {saving ? 'Assigning…' : 'Assign shift'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

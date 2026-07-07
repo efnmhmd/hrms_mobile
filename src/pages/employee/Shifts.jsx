@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../utils/api';
 import { getUser } from '../../utils/auth';
 import { getErrorMessage } from '../../utils/errorHandler';
+import ShiftMonthCalendar from '../../components/ShiftMonthCalendar';
 
 // Mirrors web MyShifts.js: per-employee rota endpoint, windowed to a few months
 // around today, then grouped into Upcoming / Past / All with a status badge.
@@ -58,6 +59,20 @@ const styles = `
   .sh-refresh:active { transform: scale(0.95); background: #f1f4f0; }
   .sh-refresh.is-loading svg { animation: sh-spin 0.9s linear infinite; }
   @keyframes sh-spin { to { transform: rotate(360deg); } }
+
+  /* ── View toggle (List / Calendar) ── */
+  .sh-viewtabs { display: flex; gap: 0.4rem; margin-bottom: 0.85rem; }
+  .sh-viewtab {
+    flex: 1; padding: 0.5rem 0.4rem; border-radius: 12px;
+    font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em;
+    border: 1px solid rgba(132, 169, 140, 0.4); background: rgba(255, 255, 255, 0.6); color: #52796f;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sh-viewtab.is-active { background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; border-color: transparent; }
+  .sh-viewtab:active { transform: scale(0.98); }
+  .sh-viewtab svg { flex-shrink: 0; }
 
   /* ── Filter tabs ── */
   .sh-tabs {
@@ -301,6 +316,19 @@ export default function Shifts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('upcoming');
+  const [view, setView] = useState('list'); // 'list' | 'calendar'
+
+  // Month-calendar view: hard-scoped per-employee feed for the visible range.
+  async function monthFetcher(startYMD, endYMD) {
+    const user = await getUser();
+    const employeeId = user?.id || user?._id;
+    if (!employeeId) throw new Error('Could not determine your employee record.');
+    const { data } = await api.get(
+      `/rota/shift-assignments/employee/${employeeId}`,
+      { params: { startDate: startYMD, endDate: endYMD } },
+    );
+    return data?.data || (Array.isArray(data) ? data : []);
+  }
 
   async function fetchShifts() {
     setLoading(true);
@@ -408,6 +436,40 @@ export default function Shifts() {
           </button>
         </header>
 
+        <div className="sh-viewtabs sh-anim">
+          <button
+            type="button"
+            className={`sh-viewtab${view === 'list' ? ' is-active' : ''}`}
+            onClick={() => setView('list')}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+            List
+          </button>
+          <button
+            type="button"
+            className={`sh-viewtab${view === 'calendar' ? ' is-active' : ''}`}
+            onClick={() => setView('calendar')}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+            </svg>
+            Calendar
+          </button>
+        </div>
+
+        {view === 'calendar' ? (
+          <ShiftMonthCalendar
+            fetcher={monthFetcher}
+            renderShift={(s) => <ShiftCard shift={s} />}
+            emptyText="You have no shift on this day."
+          />
+        ) : (
+        <>
         <div className="sh-tabs sh-anim">
           {TABS.map((t) => (
             <button
@@ -456,6 +518,8 @@ export default function Shifts() {
               ))}
             </div>
           ))
+        )}
+        </>
         )}
       </div>
     </>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getUser } from '../../utils/auth';
 import { getErrorMessage } from '../../utils/errorHandler';
@@ -442,7 +443,7 @@ export default function ELearning() {
         )}
       </div>
 
-      {viewer && (
+      {viewer && createPortal(
         <div className="elr-viewer">
           <div className="elr-viewer-bar">
             <span className="elr-viewer-title">{viewer.material?.name || viewer.material?.title || 'Material'}</span>
@@ -487,7 +488,8 @@ export default function ELearning() {
               <iframe className="elr-viewer-frame" src={viewer.url} title={viewer.material?.name || 'Material'} />
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

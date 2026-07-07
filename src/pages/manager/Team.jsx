@@ -144,13 +144,15 @@ const styles = `
   .tm-dot.is-active   { background: #52796f; }
   .tm-dot.is-inactive { background: #c0756a; }
 
-  .tm-body { min-width: 0; flex: 1; }
+  .tm-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: stretch; }
   .tm-name {
+    display: block; max-width: 100%;
     font-size: 0.9rem; font-weight: 600; color: #2f3e46;
     line-height: 1.2;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .tm-sub {
+    display: block; max-width: 100%;
     margin-top: 1px;
     font-size: 0.72rem; color: #7a8e84;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

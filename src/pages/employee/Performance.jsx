@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getErrorMessage } from '../../utils/errorHandler';
+import { useHeaderAction } from '../../components/headerAction';
+import DateField from '../../components/DateField';
 
 // Mirrors web Performance/PerformanceTab.js. Endpoints (mobile api baseURL
 // already includes /api):
@@ -36,14 +39,6 @@ const styles = `
     font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; line-height: 1.1;
     font-weight: 400; color: #2f3e46; letter-spacing: -0.01em; margin: 0.1rem 0 0;
   }
-  .pf-add-btn {
-    flex-shrink: 0; width: 38px; height: 38px; border-radius: 12px; border: none;
-    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5;
-    box-shadow: 0 3px 10px rgba(53,79,82,0.22); cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    -webkit-tap-highlight-color: transparent; transition: transform 0.12s;
-  }
-  .pf-add-btn:active { transform: scale(0.94); }
 
   /* ── Tabs ── */
   .pf-tabs { display: flex; gap: 0.35rem; background: #fff; border: 1px solid rgba(212,221,214,0.7);
@@ -115,6 +110,13 @@ const styles = `
   .pf-btn.primary { flex: 1; background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5; box-shadow: 0 3px 10px rgba(53,79,82,0.2); }
   .pf-btn.ghost { background: #fff; color: #52796f; border: 1.5px solid #d4ddd6; }
   .pf-btn.danger { background: #fff; color: #b85c50; border: 1.5px solid rgba(192,117,106,0.4); }
+  .pf-btn.danger-solid { flex: 1; background: linear-gradient(135deg, #b85c50 0%, #a04234 100%); color: #fdecea; box-shadow: 0 3px 10px rgba(160,66,52,0.24); }
+
+  .pf-confirm-glyph {
+    width: 46px; height: 46px; margin: 0.2rem auto 0.7rem; border-radius: 14px;
+    background: rgba(192,117,106,0.14); color: #b85c50;
+    display: flex; align-items: center; justify-content: center;
+  }
 
   /* ── Contributions list ── */
   .pf-contrib-head { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #84a98c; margin: 0.7rem 0 0.35rem; }
@@ -251,6 +253,7 @@ export default function Performance() {
   // Modals / inline editors
   const [objSheet, setObjSheet] = useState(null);      // { initial } | null
   const [inputSheet, setInputSheet] = useState(null);  // objective | null
+  const [confirmDelete, setConfirmDelete] = useState(null); // objective | null
   const [commentFor, setCommentFor] = useState(null);  // review id
   const [commentText, setCommentText] = useState('');
   const [saving, setSaving] = useState(false);
@@ -299,14 +302,20 @@ export default function Performance() {
     }
   }
 
+  // Native window.confirm is unreliable in installed/standalone webviews and
+  // can be permanently silenced by Safari's "Don't show more alerts" — where
+  // it returns false and the delete silently no-ops. Confirmation is handled
+  // by an in-app sheet (ConfirmDeleteSheet) instead; this just does the delete.
   async function deleteObjective(obj) {
-    if (!window.confirm('Delete this objective?')) return;
+    if (!obj?._id) return;
     setActingId(obj._id);
     try {
       await api.delete(`/goals/${obj._id}`);
       setGoals((prev) => prev.filter((g) => g._id !== obj._id));
+      setConfirmDelete(null);
       flash('success', 'Objective deleted');
     } catch (err) {
+      setConfirmDelete(null);
       flash('error', getErrorMessage(err));
     } finally {
       setActingId(null);
@@ -359,6 +368,14 @@ export default function Performance() {
     reviews: publishedReviews.length,
   };
 
+  // Surface "New objective" in the global top bar (next to the refresh button)
+  // while the Objectives tab is showing and the page is ready.
+  useHeaderAction(
+    !loading && !error && tab === 'objectives'
+      ? { label: 'New', ariaLabel: 'New objective', onClick: () => setObjSheet({ initial: null }) }
+      : null,
+  );
+
   return (
     <>
       <style>{styles}</style>
@@ -374,19 +391,6 @@ export default function Performance() {
             <p className="pf-header-eyebrow">Development</p>
             <h1 className="pf-header-title">Performance</h1>
           </div>
-          {tab === 'objectives' && (
-            <button
-              type="button"
-              className="pf-add-btn"
-              onClick={() => setObjSheet({ initial: null })}
-              aria-label="New objective"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          )}
         </header>
 
         <div className="pf-tabs pf-anim">
@@ -426,7 +430,7 @@ export default function Performance() {
             actingId={actingId}
             onAdd={() => setObjSheet({ initial: null })}
             onEdit={(obj) => setObjSheet({ initial: obj })}
-            onDelete={deleteObjective}
+            onDelete={(obj) => setConfirmDelete(obj)}
             onAddInput={(obj) => setInputSheet(obj)}
           />
         ) : tab === 'input' ? (
@@ -459,6 +463,14 @@ export default function Performance() {
           saving={saving}
           onClose={() => setInputSheet(null)}
           onSubmit={submitInput}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDeleteSheet
+          objective={confirmDelete}
+          deleting={actingId === confirmDelete._id}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => deleteObjective(confirmDelete)}
         />
       )}
     </>
@@ -755,7 +767,7 @@ function ObjectiveSheet({ initial, saving, onClose, onSave }) {
     }
   }
 
-  return (
+  return createPortal(
     <div className="pf-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <form className="pf-sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <div className="pf-sheet-grip" />
@@ -794,13 +806,12 @@ function ObjectiveSheet({ initial, saving, onClose, onSave }) {
         <div className="pf-field is-double">
           <div>
             <label className="pf-label">Start date</label>
-            <input type="date" className="pf-input" value={form.startDate}
-              onChange={(e) => set('startDate', e.target.value)} />
+            <DateField value={form.startDate} onChange={(iso) => set('startDate', iso)} />
           </div>
           <div>
             <label className="pf-label">Due date</label>
-            <input type="date" className="pf-input" value={form.endDate} min={form.startDate || undefined}
-              onChange={(e) => set('endDate', e.target.value)} />
+            <DateField value={form.endDate} min={form.startDate || undefined}
+              onChange={(iso) => set('endDate', iso)} />
           </div>
         </div>
 
@@ -817,7 +828,8 @@ function ObjectiveSheet({ initial, saving, onClose, onSave }) {
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -826,7 +838,7 @@ function ObjectiveSheet({ initial, saving, onClose, onSave }) {
 function InputSheet({ objective, saving, onClose, onSubmit }) {
   const [text, setText] = useState('');
   const previous = objective?.employeeInput || [];
-  return (
+  return createPortal(
     <div className="pf-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <div className="pf-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="pf-sheet-grip" />
@@ -858,6 +870,37 @@ function InputSheet({ objective, saving, onClose, onSubmit }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* ── Delete confirmation sheet ──────────────────────────────── */
+
+function ConfirmDeleteSheet({ objective, deleting, onCancel, onConfirm }) {
+  return createPortal(
+    <div className="pf-overlay" onClick={deleting ? undefined : onCancel} role="dialog" aria-modal="true">
+      <div className="pf-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="pf-sheet-grip" />
+        <div className="pf-confirm-glyph">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6" />
+          </svg>
+        </div>
+        <h2 className="pf-sheet-title" style={{ textAlign: 'center' }}>Delete objective?</h2>
+        <p className="pf-sheet-sub" style={{ textAlign: 'center' }}>
+          “{objective?.title || 'This objective'}” will be permanently removed. This can’t be undone.
+        </p>
+
+        <div className="pf-sheet-actions">
+          <button type="button" className="pf-btn ghost" onClick={onCancel} disabled={deleting}>Cancel</button>
+          <button type="button" className="pf-btn danger-solid" onClick={onConfirm} disabled={deleting}>
+            {deleting ? <span className="pf-mini-spin" /> : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

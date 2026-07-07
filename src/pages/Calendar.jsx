@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../utils/api';
 import { getErrorMessage } from '../utils/errorHandler';
+import { getUser, getUserGroup, USER_GROUPS } from '../utils/auth';
 
-// Shared between admin and manager. Server-side scoping decides who sees what.
-// Two endpoints (mirrors web Calendar.js:1063-1081):
-//   GET /leave/calendar?startDate=&endDate=         → leave records
-//   GET /rota/shift-assignments/all?startDate=&endDate= → shift assignments
+// Leave-only calendar, shared across roles. Server-side scoping decides who
+// sees what. Shifts live on the Shifts page now (see ShiftMonthCalendar).
+//   GET /leave/calendar?startDate=&endDate=  → leave records
 
 const styles = `
   @keyframes cal-fadeUp {
@@ -282,21 +283,18 @@ const styles = `
   .cal-tab-badge.is-success { background: rgba(82, 121, 111, 0.2); color: #2f4a35; }
   .cal-tab-badge.is-warn { background: rgba(216, 166, 76, 0.2); color: #6b4f1d; }
 
-  /* ── Header action ── */
-  .cal-add-btn {
-    flex-shrink: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 38px; height: 38px;
-    border-radius: 12px;
-    border: none;
-    background: linear-gradient(135deg, #354f52 0%, #52796f 100%);
-    color: #cad2c5;
-    box-shadow: 0 3px 10px rgba(53,79,82,0.22);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
+  /* ── Header add action ── */
+  .cal-head-btn {
+    flex-shrink: 0; margin-left: auto;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    padding: 0.5rem 0.8rem; border-radius: 999px; border: none;
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%); color: #cad2c5;
+    font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em;
+    box-shadow: 0 4px 12px rgba(53,79,82,0.22); -webkit-tap-highlight-color: transparent; cursor: pointer;
     transition: transform 0.12s;
   }
-  .cal-add-btn:active { transform: scale(0.94); }
+  .cal-head-btn:active { transform: scale(0.96); }
+  .cal-head-btn svg { flex-shrink: 0; }
 
   /* ── Request cards (Approved / My) ── */
   .cal-req-card {
@@ -409,6 +407,16 @@ const styles = `
   .cal-req-btn:disabled { opacity: 0.55; cursor: not-allowed; }
   .cal-req-btn:not(:disabled):active { transform: scale(0.97); }
   .cal-req-btn.is-cancel {
+    background: #fff;
+    color: #b85c50;
+    border: 1.5px solid rgba(192,117,106,0.55);
+  }
+  .cal-req-btn.is-approve {
+    background: linear-gradient(135deg, #354f52 0%, #52796f 100%);
+    color: #cad2c5;
+    box-shadow: 0 3px 10px rgba(53,79,82,0.22);
+  }
+  .cal-req-btn.is-reject {
     background: #fff;
     color: #b85c50;
     border: 1.5px solid rgba(192,117,106,0.55);
@@ -603,16 +611,6 @@ function leaveName(leave) {
   }
   return leave?.employeeName || 'Employee';
 }
-function shiftName(shift) {
-  if (shift?.employeeId && typeof shift.employeeId === 'object') {
-    return [shift.employeeId.firstName, shift.employeeId.lastName].filter(Boolean).join(' ');
-  }
-  if (shift?.employee) {
-    return [shift.employee.firstName, shift.employee.lastName].filter(Boolean).join(' ');
-  }
-  return shift?.employeeName || 'Unassigned';
-}
-
 function leaveCoversDay(leave, ymd) {
   if (!leave?.startDate || !leave?.endDate) return false;
   return toYMD(new Date(leave.startDate)) <= ymd && ymd <= toYMD(new Date(leave.endDate));
@@ -623,11 +621,6 @@ function leaveCoversDay(leave, ymd) {
 function leaveStarted(leave) {
   if (!leave?.startDate) return false;
   return startOfDay(new Date(leave.startDate)) <= startOfDay(new Date());
-}
-
-function shiftOnDay(shift, ymd) {
-  if (!shift?.date) return false;
-  return toYMD(new Date(shift.date)) === ymd;
 }
 
 function formatDateLong(d) {
@@ -671,14 +664,18 @@ export default function Calendar() {
   const [cursor, setCursor] = useState(today);       // first-of-month for the visible grid
   const [selected, setSelected] = useState(today);
   const [leaves, setLeaves] = useState([]);
-  const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('calendar');
   const [approved, setApproved] = useState([]);
   const [myReqs, setMyReqs] = useState([]);
+  const [pending, setPending] = useState([]);       // team/org leave awaiting my approval (admin/manager only)
+  const [pendingLoading, setPendingLoading] = useState(false);
   const [reqLoading, setReqLoading] = useState(false);
   const [actingId, setActingId] = useState(null);
+  const [rejectTarget, setRejectTarget] = useState(null);   // pending req being rejected → reason sheet
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
   const [banner, setBanner] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState({
@@ -688,8 +685,11 @@ export default function Calendar() {
     startHalfDay: 'full',
     endHalfDay: 'full',
     reason: '',
+    employeeId: '',        // '' = file for myself; otherwise on behalf of an employee
   });
   const [submitting, setSubmitting] = useState(false);
+  const [viewer, setViewer] = useState(null);     // { group } — decides the on-behalf picker
+  const [employees, setEmployees] = useState([]); // roster an admin/manager may file leave for
 
   function flash(kind, text) {
     setBanner({ kind, text });
@@ -697,7 +697,7 @@ export default function Calendar() {
   }
 
   useEffect(() => {
-    if (!modalOpen) return undefined;
+    if (!modalOpen && !rejectTarget) return undefined;
     const stage = document.querySelector('.tg-stage-inner');
     if (!stage) return undefined;
     const prevOverflow = stage.style.overflow;
@@ -718,7 +718,7 @@ export default function Calendar() {
       stage.scrollTop = scrollTop;
       document.removeEventListener('touchmove', blockTouch);
     };
-  }, [modalOpen]);
+  }, [modalOpen, rejectTarget]);
 
   async function fetchMonth(monthDate) {
     setLoading(true);
@@ -726,15 +726,10 @@ export default function Calendar() {
     const startStr = toYMD(startOfMonth(monthDate));
     const endStr = toYMD(endOfMonth(monthDate));
     try {
-      const [leaveRes, shiftRes] = await Promise.all([
-        api.get(`/leave/calendar?startDate=${startStr}&endDate=${endStr}`).catch(() => null),
-        api.get(`/rota/shift-assignments/all?startDate=${startStr}&endDate=${endStr}`).catch(() => null),
-      ]);
+      // Leave feed is scoped server-side by the caller — managers/admins see
+      // their team/org, employees see their own.
+      const leaveRes = await api.get(`/leave/calendar?startDate=${startStr}&endDate=${endStr}`);
       setLeaves(leaveRes?.data?.data || []);
-      setShifts(shiftRes?.data?.data || []);
-      if (!leaveRes && !shiftRes) {
-        setError(getErrorMessage(new Error('Both feeds failed')));
-      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -767,6 +762,53 @@ export default function Calendar() {
     fetchRequestLists();
   }, []);
 
+  // Leave awaiting the viewer's approval. Endpoint + scope differ by role:
+  //   admin   → /leave/pending-requests        (whole org, payload `{ data }`)
+  //   manager → /manager/approvals/pending     (direct team, payload `{ data: { leaveRequests } }`)
+  // Employees never see this tab, so we skip the fetch for them.
+  async function fetchPending(group) {
+    if (group === USER_GROUPS.EMPLOYEE) return;
+    setPendingLoading(true);
+    try {
+      let list = [];
+      if (group === USER_GROUPS.ADMIN) {
+        const res = await api.get('/leave/pending-requests').catch(() => null);
+        list = res?.data?.data ?? res?.data ?? [];
+      } else {
+        const res = await api.get('/manager/approvals/pending').catch(() => null);
+        const payload = res?.data?.data || res?.data || {};
+        list = payload.leaveRequests;
+      }
+      setPending(Array.isArray(list) ? list : []);
+    } finally {
+      setPendingLoading(false);
+    }
+  }
+
+  // Resolve the viewer's role once. Admins/managers can file leave on behalf of
+  // an employee, so pre-load the roster they're allowed to pick from. The
+  // endpoints mirror the Objectives/Reviews pickers: admin → whole org,
+  // manager → direct reports. A failed fetch degrades gracefully to self-only.
+  useEffect(() => {
+    (async () => {
+      const u = await getUser();
+      const group = getUserGroup(u);
+      setViewer({ group });
+      if (group === USER_GROUPS.EMPLOYEE) return;
+      fetchPending(group);
+      const url = group === USER_GROUPS.ADMIN
+        ? '/employees?includeAdmins=true'
+        : '/manager/team/members?includeIndirect=false';
+      try {
+        const { data } = await api.get(url);
+        const list = data?.data || data?.employees || (Array.isArray(data) ? data : []);
+        setEmployees(Array.isArray(list) ? list : []);
+      } catch {
+        setEmployees([]);
+      }
+    })();
+  }, []);
+
   async function cancelLeave(req) {
     if (leaveStarted(req)) {
       flash('error', 'This leave has already started and can no longer be cancelled');
@@ -787,6 +829,52 @@ export default function Calendar() {
     }
   }
 
+  // Approve a pending request outright. No window.confirm — it silently
+  // returns false inside the PWA/webview, leaving the button looking dead.
+  async function approveLeave(req) {
+    setActingId(req._id);
+    try {
+      await api.patch(`/leave/approve/${req._id}`, { adminComment: '' });
+      setPending((prev) => prev.filter((r) => r._id !== req._id));
+      flash('success', 'Leave approved');
+      fetchRequestLists();
+      fetchMonth(cursor);
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  function openReject(req) {
+    setRejectTarget(req);
+    setRejectReason('');
+  }
+  function closeReject() {
+    if (rejectSubmitting) return;
+    setRejectTarget(null);
+    setRejectReason('');
+  }
+  async function submitReject(e) {
+    e?.preventDefault?.();
+    const reason = rejectReason.trim();
+    if (!rejectTarget || !reason) return;
+    const req = rejectTarget;
+    setRejectSubmitting(true);
+    try {
+      await api.patch(`/leave/reject/${req._id}`, { rejectionReason: reason });
+      setPending((prev) => prev.filter((r) => r._id !== req._id));
+      flash('success', 'Leave rejected');
+      setRejectTarget(null);
+      setRejectReason('');
+      fetchRequestLists();
+    } catch (err) {
+      flash('error', getErrorMessage(err));
+    } finally {
+      setRejectSubmitting(false);
+    }
+  }
+
   function openModal() {
     setForm({
       leaveType: 'Annual Leave',
@@ -795,6 +883,7 @@ export default function Calendar() {
       startHalfDay: 'full',
       endHalfDay: 'full',
       reason: '',
+      employeeId: '',
     });
     setModalOpen(true);
   }
@@ -818,19 +907,35 @@ export default function Calendar() {
       const days = Math.max(1, Math.round(
         (new Date(form.endDate) - new Date(form.startDate)) / (1000 * 60 * 60 * 24)
       ) + 1) - (form.startHalfDay !== 'full' ? 0.5 : 0) - (form.endHalfDay !== 'full' ? 0.5 : 0);
-      await api.post('/leave/request', {
-        leaveType: form.leaveType,
-        startDate: form.startDate,
-        endDate: form.endDate,
-        numberOfDays: Math.max(0.5, days),
-        reason: form.reason.trim(),
-        startHalfDay: form.startHalfDay,
-        endHalfDay: form.endHalfDay,
-      });
-      flash('success', 'Time off requested');
+      const numberOfDays = Math.max(0.5, days);
+      if (form.employeeId) {
+        // Admin/manager filing on behalf of an employee → dedicated endpoint,
+        // keyed by the target's EmployeeHub _id. It ignores the half-day flags,
+        // so hand it the already-adjusted day count as `days`.
+        await api.post('/leave/admin/time-off', {
+          employeeId: form.employeeId,
+          leaveType: form.leaveType,
+          startDate: form.startDate,
+          endDate: form.endDate,
+          days: numberOfDays,
+          reason: form.reason.trim(),
+        });
+      } else {
+        await api.post('/leave/request', {
+          leaveType: form.leaveType,
+          startDate: form.startDate,
+          endDate: form.endDate,
+          numberOfDays,
+          reason: form.reason.trim(),
+          startHalfDay: form.startHalfDay,
+          endHalfDay: form.endHalfDay,
+        });
+      }
+      flash('success', form.employeeId ? 'Time off added for employee' : 'Time off requested');
       setModalOpen(false);
       fetchRequestLists();
       fetchMonth(cursor);
+      if (viewer && viewer.group !== USER_GROUPS.EMPLOYEE) fetchPending(viewer.group);
     } catch (err) {
       flash('error', getErrorMessage(err));
     } finally {
@@ -840,44 +945,75 @@ export default function Calendar() {
 
   const cells = useMemo(() => buildGrid(cursor), [cursor]);
 
-  // Per-day index of has-leave / has-shift, keyed by YYYY-MM-DD,
-  // computed once per data change to keep the grid render cheap.
-  const markers = useMemo(() => {
-    const map = new Map();
-    function bump(ymd, kind) {
-      const cur = map.get(ymd) || { leave: false, shift: false };
-      cur[kind] = true;
-      map.set(ymd, cur);
+  // The /leave/calendar feed is scoped server-side by the caller's *resolved
+  // EmployeeHub id*, which can differ from the id a request was actually filed
+  // under (profile/User logins store a User._id on the request, employee-token
+  // logins store an EmployeeHub._id). When they differ, an employee's own
+  // approved leave is missing from that feed even though it still shows under
+  // "My Requests". Fold the employee's own approved requests into the grid so
+  // approved leave always lands on the calendar. De-dup by _id keeps
+  // managers/admins — who already receive their own leave from the scoped
+  // feed — from seeing it twice.
+  const calendarLeaves = useMemo(() => {
+    const byId = new Map();
+    for (const l of leaves) {
+      if (l?._id) byId.set(String(l._id), l);
     }
-    for (const leave of leaves) {
+    for (const r of myReqs) {
+      if (normalizeStatus(r?.status) !== 'approved') continue;
+      if (!r?.startDate || !r?.endDate) continue;
+      const key = String(r._id);
+      if (!byId.has(key)) byId.set(key, r);
+    }
+    return Array.from(byId.values());
+  }, [leaves, myReqs]);
+
+  // The "Approved" tab is fed by /leave/approved-requests, which returns
+  // requests the *logged-in user approved* — an approver (manager/admin)
+  // concept that is always empty for a plain employee. Fold in the employee's
+  // own approved requests so they can see their granted leave here too.
+  // De-dup by _id avoids doubling a manager's self-approved leave.
+  const approvedForDisplay = useMemo(() => {
+    const byId = new Map();
+    for (const r of approved) {
+      if (r?._id) byId.set(String(r._id), r);
+    }
+    for (const r of myReqs) {
+      if (normalizeStatus(r?.status) !== 'approved') continue;
+      const key = String(r._id);
+      if (!byId.has(key)) byId.set(key, r);
+    }
+    return Array.from(byId.values());
+  }, [approved, myReqs]);
+
+  // Per-day set of days that carry leave, keyed by YYYY-MM-DD, computed once
+  // per data change to keep the grid render cheap.
+  const markers = useMemo(() => {
+    const set = new Set();
+    for (const leave of calendarLeaves) {
       if (!leave?.startDate || !leave?.endDate) continue;
       const s = startOfDay(new Date(leave.startDate));
       const e = startOfDay(new Date(leave.endDate));
       for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
-        bump(toYMD(d), 'leave');
+        set.add(toYMD(d));
       }
     }
-    for (const shift of shifts) {
-      if (!shift?.date) continue;
-      bump(toYMD(new Date(shift.date)), 'shift');
-    }
-    return map;
-  }, [leaves, shifts]);
+    return set;
+  }, [calendarLeaves]);
 
   const selectedYMD = toYMD(selected);
   const dayLeaves = useMemo(
-    () => leaves.filter((l) => leaveCoversDay(l, selectedYMD)),
-    [leaves, selectedYMD]
-  );
-  const dayShifts = useMemo(
-    () => shifts.filter((s) => shiftOnDay(s, selectedYMD)),
-    [shifts, selectedYMD]
+    () => calendarLeaves.filter((l) => leaveCoversDay(l, selectedYMD)),
+    [calendarLeaves, selectedYMD]
   );
 
   function goToToday() {
     setCursor(startOfMonth(today));
     setSelected(today);
   }
+
+  // Admins/managers can act on leave awaiting their approval; employees can't.
+  const canApprove = !!viewer && viewer.group !== USER_GROUPS.EMPLOYEE;
 
   return (
     <>
@@ -891,19 +1027,15 @@ export default function Calendar() {
             </svg>
           </div>
           <div className="cal-header-text">
-            <p className="cal-header-eyebrow">Leave & Shifts</p>
-            <h1 className="cal-header-title">Calendar</h1>
+            <p className="cal-header-eyebrow">Time off</p>
+            <h1 className="cal-header-title">Leaves</h1>
           </div>
-          <button
-            type="button"
-            className="cal-add-btn"
-            onClick={openModal}
-            aria-label="Request time off"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+          <button type="button" className="cal-head-btn" onClick={openModal} aria-label="Request time off">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
             </svg>
+            Time off
           </button>
         </header>
 
@@ -921,8 +1053,18 @@ export default function Calendar() {
             onClick={() => setTab('approved')}
           >
             Approved
-            <span className="cal-tab-badge is-success">{approved.length}</span>
+            <span className="cal-tab-badge is-success">{approvedForDisplay.length}</span>
           </button>
+          {canApprove && (
+            <button
+              type="button"
+              className={`cal-tab${tab === 'pending' ? ' is-active' : ''}`}
+              onClick={() => setTab('pending')}
+            >
+              Pending
+              <span className="cal-tab-badge is-warn">{pending.length}</span>
+            </button>
+          )}
           <button
             type="button"
             className={`cal-tab${tab === 'mine' ? ' is-active' : ''}`}
@@ -939,9 +1081,9 @@ export default function Calendar() {
           </div>
         )}
 
-        {tab === 'calendar' && error && leaves.length === 0 && shifts.length === 0 ? (
+        {tab === 'calendar' && error && leaves.length === 0 ? (
           <div className="cal-error cal-anim">
-            <p className="cal-error-title">Couldn't load calendar</p>
+            <p className="cal-error-title">Couldn't load leaves</p>
             <p className="cal-error-sub">{error}</p>
             <button className="cal-retry" onClick={() => fetchMonth(cursor)}>Try again</button>
           </div>
@@ -988,7 +1130,7 @@ export default function Calendar() {
                     const isOtherMonth = d.getMonth() !== cursor.getMonth();
                     const isToday = ymd === toYMD(today);
                     const isSelected = ymd === selectedYMD;
-                    const mark = markers.get(ymd);
+                    const hasLeave = markers.has(ymd);
                     return (
                       <button
                         key={ymd}
@@ -998,70 +1140,53 @@ export default function Calendar() {
                       >
                         <span>{d.getDate()}</span>
                         <span className="cal-dot-row">
-                          {mark?.leave && <span className="cal-dot is-leave" />}
-                          {mark?.shift && <span className="cal-dot is-shift" />}
+                          {hasLeave && <span className="cal-dot is-leave" />}
                         </span>
                       </button>
                     );
                   })}
                 </div>
               )}
-
-              <div className="cal-legend">
-                <span className="cal-legend-item">
-                  <span className="cal-legend-dot is-leave" /> Leave
-                </span>
-                <span className="cal-legend-item">
-                  <span className="cal-legend-dot is-shift" /> Shift
-                </span>
-              </div>
             </div>
 
             <h3 className="cal-day-heading">{formatDateLong(selected)}</h3>
 
-            {dayLeaves.length === 0 && dayShifts.length === 0 ? (
+            {dayLeaves.length === 0 ? (
               <div className="cal-empty cal-anim">
                 <p className="cal-empty-title">Nothing scheduled</p>
-                <p className="cal-empty-sub">No leave or shifts on this day.</p>
+                <p className="cal-empty-sub">No leave on this day.</p>
               </div>
             ) : (
-              <>
-                {dayLeaves.map((leave) => (
-                  <div key={`l-${leave._id}`} className="cal-event cal-anim">
-                    <span className="cal-event-bar is-leave" />
-                    <div className="cal-event-meta">
-                      <div className="cal-event-name">{leaveName(leave)}</div>
-                      <div className="cal-event-detail">
-                        {(leave.type || leave.leaveType || 'Leave')}
-                        {leave.numberOfDays ? ` · ${leave.numberOfDays}d` : ''}
-                      </div>
+              dayLeaves.map((leave) => (
+                <div key={`l-${leave._id}`} className="cal-event cal-anim">
+                  <span className="cal-event-bar is-leave" />
+                  <div className="cal-event-meta">
+                    <div className="cal-event-name">{leaveName(leave)}</div>
+                    <div className="cal-event-detail">
+                      {(leave.type || leave.leaveType || 'Leave')}
+                      {leave.numberOfDays ? ` · ${leave.numberOfDays}d` : ''}
                     </div>
-                    <span className="cal-event-pill is-leave">Leave</span>
                   </div>
-                ))}
-                {dayShifts.map((shift) => (
-                  <div key={`s-${shift._id}`} className="cal-event cal-anim">
-                    <span className="cal-event-bar is-shift" />
-                    <div className="cal-event-meta">
-                      <div className="cal-event-name">{shiftName(shift)}</div>
-                      <div className="cal-event-detail">
-                        {(shift.startTime && shift.endTime) ? `${shift.startTime} – ${shift.endTime}` : ''}
-                        {shift.location ? `${(shift.startTime ? ' · ' : '')}${shift.location}` : ''}
-                      </div>
-                    </div>
-                    <span className="cal-event-pill is-shift">Shift</span>
-                  </div>
-                ))}
-              </>
+                  <span className="cal-event-pill is-leave">Leave</span>
+                </div>
+              ))
             )}
           </>
         ) : tab === 'approved' ? (
           <ApprovedList
-            items={approved}
+            items={approvedForDisplay}
             loading={reqLoading}
             actingId={actingId}
             onCancel={cancelLeave}
             onOpenForm={openModal}
+          />
+        ) : tab === 'pending' ? (
+          <PendingList
+            items={pending}
+            loading={pendingLoading}
+            actingId={actingId}
+            onApprove={approveLeave}
+            onReject={openReject}
           />
         ) : (
           <MyRequestsList
@@ -1078,8 +1203,21 @@ export default function Calendar() {
             form={form}
             setForm={setForm}
             submitting={submitting}
+            employees={employees}
+            canPickEmployee={!!viewer && viewer.group !== USER_GROUPS.EMPLOYEE}
             onClose={() => setModalOpen(false)}
             onSubmit={submitTimeOff}
+          />
+        )}
+
+        {rejectTarget && (
+          <RejectSheet
+            target={rejectTarget}
+            reason={rejectReason}
+            setReason={setRejectReason}
+            submitting={rejectSubmitting}
+            onClose={closeReject}
+            onSubmit={submitReject}
           />
         )}
       </div>
@@ -1273,8 +1411,140 @@ function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm }) {
   });
 }
 
-function TimeOffSheet({ form, setForm, submitting, onClose, onSubmit }) {
-  return (
+function PendingList({ items, loading, actingId, onApprove, onReject }) {
+  if (loading && items.length === 0) {
+    return (
+      <>
+        {Array.from({ length: 3 }).map((_, i) => <RequestCardSkeleton key={i} />)}
+      </>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <div className="cal-empty cal-anim">
+        <p className="cal-empty-title">All caught up</p>
+        <p className="cal-empty-sub">No leave requests are waiting for approval.</p>
+      </div>
+    );
+  }
+  return items.map((req) => {
+    const name = leaveName(req);
+    const employee = req?.employeeId && typeof req.employeeId === 'object' ? req.employeeId : null;
+    const sub = [employee?.department, employee?.jobTitle].filter(Boolean).join(' · ')
+      || employee?.email || req.leaveType || 'Leave';
+    const acting = actingId === req._id;
+    return (
+      <div key={req._id} className="cal-req-card cal-anim">
+        <div className="cal-req-top">
+          <span className="cal-req-avatar">{initials(name)}</span>
+          <div className="cal-req-meta">
+            <div className="cal-req-name">{name}</div>
+            <div className="cal-req-sub">{sub}</div>
+          </div>
+          <span className="cal-req-pill is-pending">Pending</span>
+        </div>
+        <div className="cal-req-grid">
+          <div>
+            <div className="cal-req-field-label">Type</div>
+            <div className="cal-req-field-value">{req.leaveType || '—'}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">Days</div>
+            <div className="cal-req-field-value">{req.numberOfDays ?? '—'}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">From</div>
+            <div className="cal-req-field-value">{formatGB(req.startDate)}</div>
+          </div>
+          <div>
+            <div className="cal-req-field-label">To</div>
+            <div className="cal-req-field-value">{formatGB(req.endDate)}</div>
+          </div>
+        </div>
+        {req.reason && (
+          <div className="cal-req-reason">
+            <span className="cal-req-reason-label">Reason</span>
+            {req.reason}
+          </div>
+        )}
+        <div className="cal-req-actions">
+          <button
+            type="button"
+            className="cal-req-btn is-reject"
+            onClick={() => onReject(req)}
+            disabled={acting}
+          >
+            Reject
+          </button>
+          <button
+            type="button"
+            className="cal-req-btn is-approve"
+            onClick={() => onApprove(req)}
+            disabled={acting}
+          >
+            {acting ? <span className="cal-mini-spin" /> : null}
+            Approve
+          </button>
+        </div>
+      </div>
+    );
+  });
+}
+
+function RejectSheet({ target, reason, setReason, submitting, onClose, onSubmit }) {
+  return createPortal(
+    <div className="cal-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <form className="cal-sheet" onClick={(e) => e.stopPropagation()} onSubmit={onSubmit}>
+        <div className="cal-sheet-grip" />
+        <h2 className="cal-sheet-title">Reject leave request</h2>
+        <p className="cal-sheet-sub">{leaveName(target)}</p>
+        <div className="cal-form-row">
+          <label className="cal-form-label">Reason for rejection</label>
+          <textarea
+            className="cal-form-textarea"
+            placeholder="Let the employee know why this leave is being rejected…"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={500}
+            autoFocus
+          />
+        </div>
+        <div className="cal-sheet-actions">
+          <button
+            type="button"
+            className="cal-sheet-btn is-secondary"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="cal-sheet-btn is-primary"
+            disabled={submitting || !reason.trim()}
+          >
+            {submitting ? <span className="cal-mini-spin" /> : null}
+            Reject
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body,
+  );
+}
+
+function employeeLabel(emp) {
+  const name = [emp?.firstName, emp?.lastName].filter(Boolean).join(' ').trim();
+  const base = name || emp?.email || 'Employee';
+  return emp?.department ? `${base} · ${emp.department}` : base;
+}
+
+function TimeOffSheet({ form, setForm, submitting, employees = [], canPickEmployee = false, onClose, onSubmit }) {
+  const onBehalf = canPickEmployee && !!form.employeeId;
+  const sortedEmployees = [...employees].sort((a, b) =>
+    employeeLabel(a).localeCompare(employeeLabel(b))
+  );
+  return createPortal(
     <div className="cal-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <form
         className="cal-sheet"
@@ -1283,7 +1553,25 @@ function TimeOffSheet({ form, setForm, submitting, onClose, onSubmit }) {
       >
         <div className="cal-sheet-grip" />
         <h2 className="cal-sheet-title">Request Time Off</h2>
-        <p className="cal-sheet-sub">Submit a new leave request</p>
+        <p className="cal-sheet-sub">
+          {onBehalf ? 'Filing leave on behalf of an employee' : 'Submit a new leave request'}
+        </p>
+
+        {canPickEmployee && (
+          <div className="cal-form-row">
+            <label className="cal-form-label">Employee</label>
+            <select
+              className="cal-form-select"
+              value={form.employeeId}
+              onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))}
+            >
+              <option value="">Myself</option>
+              {sortedEmployees.map((emp) => (
+                <option key={emp._id} value={emp._id}>{employeeLabel(emp)}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="cal-form-row">
           <label className="cal-form-label">Leave Type</label>
@@ -1372,6 +1660,7 @@ function TimeOffSheet({ form, setForm, submitting, onClose, onSubmit }) {
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

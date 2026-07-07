@@ -10,6 +10,11 @@ if (Capacitor.isNativePlatform()) {
   StatusBar.setBackgroundColor({ color: '#52796f' }).catch(() => {});
   StatusBar.setStyle({ style: Style.Light }).catch(() => {});
   StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+} else if ('serviceWorker' in navigator) {
+  // Register the PWA service worker only on the web build (not inside Capacitor).
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
