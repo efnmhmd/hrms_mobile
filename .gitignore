@@ -12,7 +12,7 @@ web_frontend/**/.env.*
 web_frontend/**/*.log
 web_frontend/**/build-output.txt
 web_frontend/**/package-lock.json
-
+hrms_backend_frontend_for_just_information
 # Env
 .env
 .env.local
