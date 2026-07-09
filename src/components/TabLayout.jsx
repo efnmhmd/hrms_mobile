@@ -57,7 +57,11 @@ const styles = `
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 10px 16px;
+    /* Bake the iOS safe-area inset into the top padding. Keeping it here (rather
+       than on a separate .safe-top class) avoids a shorthand-vs-longhand
+       override: this shorthand would otherwise reset .safe-top's padding-top
+       back to 10px, letting the header slide under the iOS status bar. */
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px;
     background: rgba(247, 248, 246, 0.86);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     backdrop-filter: saturate(180%) blur(20px);
@@ -379,7 +383,7 @@ export default function TabLayout({ onLogout }) {
     <div className="flex h-full flex-col">
       <style>{styles}</style>
 
-      <header className="tg-topbar safe-top">
+      <header className="tg-topbar">
         <div className="tg-topbar-left">
           {!isTabRoot && (
             <button
