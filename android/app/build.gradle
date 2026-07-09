@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace "com.talentshield.hrms"
+    namespace "uk.co.talentshield.hrms"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.talentshield.hrms"
+        applicationId "uk.co.talentshield.hrms"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

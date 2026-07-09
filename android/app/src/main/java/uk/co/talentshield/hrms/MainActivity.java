@@ -1,4 +1,4 @@
-package com.talentshield.hrms;
+package uk.co.talentshield.hrms;
 
 import com.getcapacitor.BridgeActivity;
 

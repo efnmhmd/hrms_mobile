@@ -1,5 +1,5 @@
 {
-  "appId": "com.talentshield.hrms",
+  "appId": "uk.co.talentshield.hrms",
   "appName": "HRMS",
   "webDir": "dist",
   "server": {
