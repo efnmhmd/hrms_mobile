@@ -24,8 +24,9 @@ concurrency:
 
 jobs:
   build-ipa:
-    # iOS builds must run on macOS. macos-14 = Apple Silicon with recent Xcode.
-    runs-on: macos-14
+    # iOS builds must run on macOS. Apple requires builds from the iOS 26 SDK
+    # (Xcode 26+), which is available on the macos-15 runner image.
+    runs-on: macos-15
 
     env:
       # Falls back to app-store when triggered by a push (no manual input available).
@@ -44,7 +45,13 @@ jobs:
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "15.4"
+          # Apple requires the iOS 26 SDK (Xcode 26+) for App Store uploads.
+          xcode-version: latest-stable
+
+      - name: Show Xcode / SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Install JS dependencies
         run: npm ci
