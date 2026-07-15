@@ -24,6 +24,17 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!--
+	  Required by the "Attach receipt" file input (accept="image/*"): tapping
+	  Take Photo / Photo Library makes WKWebView reach for the camera and photo
+	  library, and iOS terminates the app on first access if the matching usage
+	  string is absent. The photo-library string is still needed at the iOS 13
+	  deployment target, where the picker runs in-process rather than as PHPicker.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>HRMS uses the camera so you can photograph a receipt to attach to an expense claim.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>HRMS needs access to your photos so you can attach a saved receipt to an expense claim.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

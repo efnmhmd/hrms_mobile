@@ -334,8 +334,33 @@ const styles = `
   .sm-picker-item-text { flex: 1; min-width: 0; }
   .sm-picker-item-name { display: block; font-size: 0.86rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sm-picker-item-sub { display: block; font-size: 0.7rem; color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-  .sm-picker-check { flex-shrink: 0; color: #52796f; }
   .sm-picker-empty { padding: 1.4rem 0.5rem; text-align: center; font-size: 0.78rem; color: #9aa8a0; font-style: italic; }
+  .sm-picker-all {
+    flex-shrink: 0; padding: 0.25rem 0.4rem; border: none; border-radius: 7px; background: none;
+    font-family: 'DM Sans', sans-serif; font-size: 0.74rem; font-weight: 600; color: #52796f;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .sm-picker-all:active { background: #eef2ef; }
+  .sm-picker-foot { padding-top: 0.6rem; }
+  .sm-picker-foot .sm-btn { width: 100%; }
+  .sm-check-box {
+    flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px;
+    border: 1.5px solid #cfdad3; background: #fff; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.14s, border-color 0.14s;
+  }
+  .sm-check-box.is-on { background: #52796f; border-color: #52796f; }
+  .sm-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+  .sm-chip {
+    display: inline-flex; align-items: center; gap: 0.3rem; max-width: 100%;
+    padding: 0.24rem 0.42rem 0.24rem 0.6rem; border-radius: 999px;
+    border: 1px solid rgba(82, 121, 111, 0.25); background: rgba(82, 121, 111, 0.09);
+    font-family: 'DM Sans', sans-serif; font-size: 0.72rem; font-weight: 600; color: #354f52;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .sm-chip:disabled { opacity: 0.6; cursor: default; }
+  .sm-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sm-chip svg { flex-shrink: 0; color: #6b8a80; }
 `;
 
 function toYMD(d) {
@@ -463,6 +488,23 @@ function weekdaysInRange(startYMD, endYMD) {
 function makeGroupId() {
   if (typeof crypto !== 'undefined' && crypto?.randomUUID) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// Runs workers over `items` with at most `limit` in flight. Assigning a range
+// to a whole roster is employees × weekdays requests, so this keeps a
+// select-all on a large org list from opening a connection per employee.
+async function runPooled(items, limit, worker) {
+  const results = [];
+  let next = 0;
+  async function drain() {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await worker(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, drain));
+  return results;
 }
 
 // ── Custom date field (displays dd/mm/yyyy, opens an in-app calendar) ──
@@ -601,13 +643,15 @@ function memberName(m) {
 
 // Searchable, in-app employee picker. Replaces a native <select> so the roster
 // (org-wide for admins) stays usable on mobile and matches the modal's custom
-// date fields. The sheet is portalled to <body> — the swipe-back stage
-// transform clips position:fixed otherwise.
-function EmployeePicker({ members, loading, error, value, onChange, disabled, placeholder }) {
+// date fields. Multi-select: a tap toggles a row and the sheet stays open, so
+// one shift range can go to several people in a single pass. The sheet is
+// portalled to <body> — the swipe-back stage transform clips position:fixed
+// otherwise.
+function EmployeePicker({ members, loading, error, values, onChange, disabled, placeholder }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
 
-  const selected = useMemo(() => members.find((m) => m._id === value) || null, [members, value]);
+  const selected = useMemo(() => members.filter((m) => values.includes(m._id)), [members, values]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -623,11 +667,28 @@ function EmployeePicker({ members, loading, error, value, onChange, disabled, pl
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
-  const label = loading ? 'Loading…' : error ? 'Team unavailable' : selected ? memberName(selected) : placeholder;
+  const label = loading ? 'Loading…'
+    : error ? 'Team unavailable'
+      : selected.length === 1 ? memberName(selected[0])
+        : selected.length > 1 ? `${selected.length} employees selected`
+          : placeholder;
   const triggerDisabled = disabled || loading || !!error || members.length === 0;
 
-  function choose(id) {
-    onChange(id);
+  // Select-all follows the search box: with a query active it acts on the
+  // matches only, which is how a big org roster gets narrowed to a sub-team.
+  const allFilteredSelected = filtered.length > 0 && filtered.every((m) => values.includes(m._id));
+
+  function toggle(id) {
+    onChange(values.includes(id) ? values.filter((x) => x !== id) : [...values, id]);
+  }
+
+  function toggleAllFiltered() {
+    const ids = filtered.map((m) => m._id);
+    if (allFilteredSelected) onChange(values.filter((x) => !ids.includes(x)));
+    else onChange([...new Set([...values, ...ids])]);
+  }
+
+  function close() {
     setOpen(false);
     setQuery('');
   }
@@ -637,17 +698,38 @@ function EmployeePicker({ members, loading, error, value, onChange, disabled, pl
       <button type="button" id="asg-emp" className="sm-input sm-date-trigger"
         onClick={() => !triggerDisabled && setOpen(true)} disabled={triggerDisabled}
         aria-haspopup="dialog" aria-expanded={open}>
-        <span className={selected ? 'sm-date-val' : 'sm-date-ph'}>{label}</span>
+        <span className={selected.length ? 'sm-date-val' : 'sm-date-ph'}>{label}</span>
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
       </button>
+      {/* One name already shows in the trigger; chips only earn their space
+          once the selection is a list the manager can't otherwise see. */}
+      {selected.length > 1 && (
+        <div className="sm-chips">
+          {selected.map((m) => (
+            <button key={m._id} type="button" className="sm-chip" disabled={disabled}
+              onClick={() => toggle(m._id)} aria-label={`Remove ${memberName(m)}`}>
+              <span className="sm-chip-text">{memberName(m)}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          ))}
+        </div>
+      )}
       {open && createPortal(
-        <div className="sm-picker-overlay" onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
-          <div className="sm-picker-sheet" role="dialog" aria-modal="true" aria-label="Select an employee">
+        <div className="sm-picker-overlay" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+          <div className="sm-picker-sheet" role="dialog" aria-modal="true" aria-label="Select employees">
             <div className="sm-modal-grab" />
             <div className="sm-picker-head">
               <h3 className="sm-picker-title">{placeholder}</h3>
-              <button type="button" className="sm-close" onClick={() => setOpen(false)} aria-label="Close">
+              {filtered.length > 0 && (
+                <button type="button" className="sm-picker-all" onClick={toggleAllFiltered}>
+                  {allFilteredSelected ? 'Clear' : 'Select all'}
+                </button>
+              )}
+              <button type="button" className="sm-close" onClick={close} aria-label="Close">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                   strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" /></svg>
               </button>
@@ -665,23 +747,33 @@ function EmployeePicker({ members, loading, error, value, onChange, disabled, pl
             <div className="sm-picker-list">
               {filtered.length === 0 ? (
                 <div className="sm-picker-empty">No matching employees.</div>
-              ) : filtered.map((m) => (
-                <button key={m._id} type="button"
-                  className={`sm-picker-item${m._id === value ? ' is-sel' : ''}`}
-                  onClick={() => choose(m._id)}>
-                  <span className="sm-avatar sm-picker-av">{initials(memberName(m))}</span>
-                  <span className="sm-picker-item-text">
-                    <span className="sm-picker-item-name">{memberName(m)}</span>
-                    {m.email && <span className="sm-picker-item-sub">{m.email}</span>}
-                  </span>
-                  {m._id === value && (
-                    <svg className="sm-picker-check" width="17" height="17" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M20 6L9 17l-5-5" />
-                    </svg>
-                  )}
-                </button>
-              ))}
+              ) : filtered.map((m) => {
+                const on = values.includes(m._id);
+                return (
+                  <button key={m._id} type="button" aria-pressed={on}
+                    className={`sm-picker-item${on ? ' is-sel' : ''}`}
+                    onClick={() => toggle(m._id)}>
+                    <span className="sm-avatar sm-picker-av">{initials(memberName(m))}</span>
+                    <span className="sm-picker-item-text">
+                      <span className="sm-picker-item-name">{memberName(m)}</span>
+                      {m.email && <span className="sm-picker-item-sub">{m.email}</span>}
+                    </span>
+                    <span className={`sm-check-box${on ? ' is-on' : ''}`}>
+                      {on && (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="sm-picker-foot">
+              <button type="button" className="sm-btn sm-btn-primary" onClick={close}>
+                {values.length ? `Done · ${values.length} selected` : 'Done'}
+              </button>
             </div>
           </div>
         </div>,
@@ -744,9 +836,18 @@ export default function ManagerShiftManagement({ scope = 'team' }) {
   // After a successful assignment, jump the view to the week the shift starts
   // in (so the manager sees it appear) and refresh. Changing weekStart refetches
   // via the effect above; if it's already the visible week, refetch explicitly.
-  function handleAssigned(count, startYMD) {
+  function handleAssigned(count, startYMD, { employeeCount = 1, failedNames = [] } = {}) {
     setAssignOpen(false);
-    setFlash(`${count} shift${count === 1 ? '' : 's'} assigned`);
+    let msg = `${count} shift${count === 1 ? '' : 's'} assigned`;
+    if (employeeCount > 1) msg += ` to ${employeeCount} employees`;
+    // Name who missed out while the list is short enough to read — a conflict
+    // or approved leave silently dropping someone is worth surfacing.
+    if (failedNames.length) {
+      msg += failedNames.length <= 2
+        ? ` · skipped ${failedNames.join(', ')}`
+        : ` · ${failedNames.length} skipped`;
+    }
+    setFlash(msg);
     const target = startOfWeek(new Date(`${startYMD}T00:00:00`));
     if (toYMD(target) === toYMD(weekStart)) fetchShifts(true);
     else setWeekStart(target);
@@ -1077,7 +1178,7 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
   const [membersLoading, setMembersLoading] = useState(true);
   const [membersError, setMembersError] = useState(null);
 
-  const [employeeId, setEmployeeId] = useState('');
+  const [employeeIds, setEmployeeIds] = useState([]);
   const [startDate, setStartDate] = useState(defaultDate);
   const [endDate, setEndDate] = useState(defaultDate);
   const [startTime, setStartTime] = useState('09:00');
@@ -1124,7 +1225,7 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
 
   async function handleSubmit() {
     setError(null);
-    if (!employeeId) return setError('Please select an employee.');
+    if (employeeIds.length === 0) return setError('Please select at least one employee.');
     if (!startDate || !endDate) return setError('Please choose a date range.');
     if (endDate < startDate) return setError('The end date must be on or after the start date.');
     if (!startTime || !endTime) return setError('Please set a start and end time.');
@@ -1134,7 +1235,6 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
     if (dates.length === 0) return setError('No weekdays in that range — weekends are excluded from shifts.');
 
     setSaving(true);
-    const groupId = makeGroupId();
     const brk = Number(breakDuration);
     const payloadBase = {
       shiftName: shiftName.trim(),
@@ -1146,48 +1246,67 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
       notes: notes.trim(),
     };
 
-    let ok = 0;
-    let firstError = null;
-    // One shift per weekday, sendEmail:false — then a single summary email
-    // for the whole range (mirrors the web planner to avoid one email per day).
-    for (const date of dates) {
-      try {
-        const { data } = await api.post('/rota/assign-shift', {
-          ...payloadBase,
-          employeeId,
-          date,
-          groupId,
-          startDate,
-          endDate,
-          sendEmail: false,
-        });
-        if (data?.success !== false) ok += 1;
-      } catch (err) {
-        if (!firstError) firstError = getErrorMessage(err);
+    // /rota/assign-shift takes one employee for one date, so a multi-employee
+    // range fans out here. Each employee gets their own groupId: the group is
+    // the unit the rota deletes by, and a shared id would make removing one
+    // person's range wipe everyone's.
+    async function assignTo(id) {
+      const groupId = makeGroupId();
+      let ok = 0;
+      let firstError = null;
+      for (const date of dates) {
+        try {
+          const { data } = await api.post('/rota/assign-shift', {
+            ...payloadBase,
+            employeeId: id,
+            date,
+            groupId,
+            startDate,
+            endDate,
+            sendEmail: false,
+          });
+          if (data?.success !== false) ok += 1;
+        } catch (err) {
+          if (!firstError) firstError = getErrorMessage(err);
+        }
       }
+      // One summary email per employee covering their whole range, rather than
+      // one per day (mirrors the web planner).
+      if (ok > 0) {
+        try {
+          await api.post('/rota/assign-shift/notify', {
+            employeeId: id,
+            shiftName: payloadBase.shiftName,
+            startDate,
+            endDate,
+            startTime,
+            endTime,
+            location,
+            count: ok,
+          });
+        } catch {
+          // summary email is non-fatal — the shifts are already saved.
+        }
+      }
+      return { id, ok, firstError };
     }
 
-    if (ok > 0) {
-      try {
-        await api.post('/rota/assign-shift/notify', {
-          employeeId,
-          shiftName: payloadBase.shiftName,
-          startDate,
-          endDate,
-          startTime,
-          endTime,
-          location,
-          count: ok,
-        });
-      } catch {
-        // summary email is non-fatal — the shifts are already saved.
-      }
-      onAssigned(ok, startDate);
+    const results = await runPooled(employeeIds, 4, assignTo);
+    const assigned = results.reduce((sum, r) => sum + r.ok, 0);
+    const failed = results.filter((r) => r.ok === 0);
+
+    if (assigned > 0) {
+      // Partial success still closes: the saved shifts are real, and
+      // re-submitting to retry the rest would double-book everyone who worked.
+      onAssigned(assigned, startDate, {
+        employeeCount: results.length - failed.length,
+        failedNames: failed.map((r) => memberName(members.find((m) => m._id === r.id) || {})),
+      });
       return;
     }
 
     setSaving(false);
-    setError(firstError || 'Could not assign the shift. Please try again.');
+    setError(failed[0]?.firstError || 'Could not assign the shift. Please try again.');
   }
 
   return createPortal(
@@ -1198,7 +1317,9 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
           <div className="sm-modal-head-text">
             <h2 className="sm-modal-title">Assign a shift</h2>
             <p className="sm-modal-sub">
-              {isOrg ? 'Schedule a shift for any employee.' : 'Schedule a shift for a member of your team.'}
+              {isOrg
+                ? 'Schedule a shift for one or more employees.'
+                : 'Schedule a shift for one or more of your team.'}
             </p>
           </div>
           <button type="button" className="sm-close" onClick={onClose} disabled={saving} aria-label="Close">
@@ -1220,15 +1341,15 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
         )}
 
         <div className="sm-field">
-          <label className="sm-field-label" htmlFor="asg-emp">Employee <span className="sm-field-req">*</span></label>
+          <label className="sm-field-label" htmlFor="asg-emp">Employees <span className="sm-field-req">*</span></label>
           <EmployeePicker
             members={members}
             loading={membersLoading}
             error={membersError}
-            value={employeeId}
-            onChange={setEmployeeId}
+            values={employeeIds}
+            onChange={setEmployeeIds}
             disabled={saving}
-            placeholder={isOrg ? 'Select an employee…' : 'Select a team member…'}
+            placeholder={isOrg ? 'Select employees…' : 'Select team members…'}
           />
           {membersError && <p className="sm-hint">{membersError}</p>}
           {!membersLoading && !membersError && members.length === 0 && (
@@ -1320,9 +1441,9 @@ function AssignShiftModal({ isOrg, defaultDate, onClose, onAssigned }) {
             Cancel
           </button>
           <button type="button" className="sm-btn sm-btn-primary" onClick={handleSubmit}
-            disabled={saving || membersLoading || !employeeId || dayCount === 0}>
+            disabled={saving || membersLoading || employeeIds.length === 0 || dayCount === 0}>
             {saving ? <span className="sm-mini-spin" /> : null}
-            {saving ? 'Assigning…' : 'Assign shift'}
+            {saving ? 'Assigning…' : employeeIds.length > 1 ? `Assign to ${employeeIds.length}` : 'Assign shift'}
           </button>
         </div>
       </div>
