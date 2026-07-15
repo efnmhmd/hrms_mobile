@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../utils/api';
 import { getUser } from '../utils/auth';
 import { getErrorMessage } from '../utils/errorHandler';
+import { canPreviewInApp, isNativePlatform, openBlobWithOsViewer, saveBlobToDevice } from '../utils/files';
 
 // Shared folder-based Documents browser used by every role.
 //
@@ -309,11 +310,6 @@ function extKind(ext) {
   if (['xls', 'xlsx', 'csv'].includes(ext)) return 'sheet';
   return 'doc';
 }
-function isInlineViewable(mimeType, ext) {
-  const m = String(mimeType || '').toLowerCase();
-  if (m.includes('pdf') || m.startsWith('image/')) return true;
-  return ext === 'pdf' || extKind(ext) === 'img';
-}
 function formatSize(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -488,15 +484,25 @@ export default function DocumentsBrowser({
     if (!id) return;
     const mime = doc.mimeType || doc.fileType || '';
     const ext = docExt(doc);
-    const inline = isInlineViewable(mime, ext);
-    setViewer({ doc, url: null, mime, inline, loading: true, failed: false });
+    const inline = canPreviewInApp(mime, ext);
+    const native = isNativePlatform();
+    setViewer({ doc, url: null, mime, inline, loading: true, failed: false, error: null });
     try {
       const res = await api.get(`${BASE}/documents/${id}/view`, { responseType: 'blob' });
       const blob = new Blob([res.data], { type: mime || 'application/octet-stream' });
+
+      // Anything the WebView can't paint itself goes to the OS viewer — on
+      // Android that's every PDF, which is what used to render as a blank page.
+      if (native && !inline) {
+        await openBlobWithOsViewer(blob, docName(doc), mime);
+        setViewer(null);
+        return;
+      }
+
       const url = URL.createObjectURL(blob);
-      setViewer({ doc, url, mime, inline, loading: false, failed: false });
-    } catch {
-      setViewer({ doc, url: null, mime, inline, loading: false, failed: true });
+      setViewer({ doc, url, mime, inline, loading: false, failed: false, error: null });
+    } catch (err) {
+      setViewer({ doc, url: null, mime, inline, loading: false, failed: true, error: getErrorMessage(err) });
     }
   }
 
@@ -508,10 +514,21 @@ export default function DocumentsBrowser({
   async function downloadDocument(doc) {
     const id = doc?._id || doc?.id;
     if (!id) return;
+    const mime = doc.mimeType || doc.fileType || '';
     setDownloadingId(id);
     try {
       const res = await api.get(`${BASE}/documents/${id}/download`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: doc.mimeType || 'application/octet-stream' }));
+      const blob = new Blob([res.data], { type: mime || 'application/octet-stream' });
+
+      // A WebView ignores <a download>, so on a device the file has to be
+      // written to storage ourselves.
+      if (isNativePlatform()) {
+        const { location } = await saveBlobToDevice(blob, docName(doc), mime);
+        flash('success', `Saved to ${location}`);
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.setAttribute('download', docName(doc));
@@ -1083,7 +1100,7 @@ function DocumentViewerOverlay({ viewer, onClose, onRetry, onDownload }) {
     <div className="ed-viewer">
       <div className="ed-viewer-bar">
         <span className="ed-viewer-title">{title}</span>
-        {viewer.url && (
+        {!viewer.loading && (
           <button type="button" className="ed-viewer-btn" onClick={onDownload} aria-label="Download">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
@@ -1105,7 +1122,9 @@ function DocumentViewerOverlay({ viewer, onClose, onRetry, onDownload }) {
         ) : viewer.failed ? (
           <div className="ed-viewer-center">
             <span>Couldn't open this document.</span>
+            {viewer.error && <span style={{ fontSize: '0.75rem', opacity: 0.75 }}>{viewer.error}</span>}
             <button type="button" className="ed-viewer-fallback-btn" onClick={onRetry}>Try again</button>
+            <button type="button" className="ed-viewer-fallback-btn" onClick={onDownload}>Download instead</button>
           </div>
         ) : !viewer.inline ? (
           <div className="ed-viewer-center">

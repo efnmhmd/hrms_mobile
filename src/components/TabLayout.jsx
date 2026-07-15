@@ -33,6 +33,7 @@ const ROUTE_TITLES = {
 // Pattern-based titles for routes that include params (so a static map can't
 // match the full path). First matching regex wins.
 const ROUTE_TITLE_PATTERNS = [
+  { test: /^\/(admin|manager)\/clock-ins\/[^/]+$/, title: 'Clock-in Detail' },
   { test: /^\/employees\/[^/]+$/, title: 'Employee' },
 ];
 
@@ -50,6 +51,18 @@ function titleForPath(pathname) {
 }
 
 const styles = `
+  /* ── App shell ── */
+  /* Pin the whole layout to the real viewport height so the flex column fills
+     the screen and the bottom tab bar stays glued to the bottom. On iOS
+     WKWebView a percentage-height chain (h-full → height:100%) is unreliable
+     under viewport-fit=cover and collapses to content height, which lets the
+     in-flow footer drift up. 100dvh resolves to the actual visible height on
+     iOS; 100vh is the fallback for anything without dvh support. */
+  .tg-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   /* ── Top bar with right-aligned brand logo ── */
   .tg-topbar {
     position: relative;
@@ -380,7 +393,7 @@ export default function TabLayout({ onLogout }) {
   }, [navigate]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="tg-shell flex flex-col">
       <style>{styles}</style>
 
       <header className="tg-topbar">
