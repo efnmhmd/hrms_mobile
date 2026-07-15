@@ -102,15 +102,15 @@ Paste the resulting text as the secret value.
 ## Step 3b — Provisioning profile → `IOS_PROVISIONING_PROFILE_BASE64`
 
 Because we sign **manually**, you must supply the provisioning profile yourself. It must be tied
-to the App ID `uk.co.talentshield.hrms`, your Distribution certificate (Step 3), and the export
+to the App ID `com.talentshield.hrms`, your Distribution certificate (Step 3), and the export
 method you build (default = **App Store**).
 
 1. Make sure the App ID exists: <https://developer.apple.com/account/resources/identifiers/list>
-   → **+** → **App IDs** → **App** → Bundle ID `uk.co.talentshield.hrms` (explicit).
+   → **+** → **App IDs** → **App** → Bundle ID `com.talentshield.hrms` (explicit).
 2. Create the profile: <https://developer.apple.com/account/resources/profiles/list> → **+**
    - For the default build choose **App Store Connect** (distribution).
      (Choose **Ad Hoc** or **iOS App Development** instead if you build those export methods.)
-   - App ID: `uk.co.talentshield.hrms`
+   - App ID: `com.talentshield.hrms`
    - Certificate: the **Apple Distribution** cert from Step 3.
    - Name it something memorable, then **Download** the `.mobileprovision`.
 3. Convert it to base64 and store it as `IOS_PROVISIONING_PROFILE_BASE64`:
@@ -173,11 +173,11 @@ Devices window.
   `ios/App/App.xcodeproj/xcshareddata/xcschemes/`.
 - **`No signing certificate "iOS Distribution" found`**
   The `.p12` is wrong/empty, or it's a *Development* cert. Re-export an **Apple Distribution** cert.
-- **`No profiles for 'uk.co.talentshield.hrms' were found`** /
+- **`No profiles for 'com.talentshield.hrms' were found`** /
   **`Revoke certificate: ... Apple Development signing certificate ...`**
   These come from **automatic** signing trying to manage certs/profiles on the CI machine.
   This workflow uses **manual** signing, so make sure `IOS_PROVISIONING_PROFILE_BASE64` is set
-  to a valid distribution profile for `uk.co.talentshield.hrms` (Step 3b) that **matches the
+  to a valid distribution profile for `com.talentshield.hrms` (Step 3b) that **matches the
   export method**, and that its certificate matches `IOS_DIST_CERT_P12_BASE64`.
 - **`No signing certificate "Apple Distribution" found`**
   Your `.p12` is a legacy *iPhone Distribution* cert. Either re-export an **Apple Distribution**
