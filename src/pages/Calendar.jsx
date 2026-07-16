@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../utils/api';
 import { getErrorMessage } from '../utils/errorHandler';
 import { getUser, getUserGroup, USER_GROUPS } from '../utils/auth';
+import { LEAVE_TYPES } from '../utils/leaveTypes';
 
 // Leave-only calendar, shared across roles. Server-side scoping decides who
 // sees what. Shifts live on the Shifts page now (see ShiftMonthCalendar).
@@ -652,12 +653,6 @@ function approverName(req) {
   if (typeof a === 'string') return a;
   return [a.firstName, a.lastName].filter(Boolean).join(' ') || a.email || null;
 }
-
-const LEAVE_TYPES = [
-  'Annual Leave', 'Sick Leave', 'Bank Holiday', 'Compassionate Leave',
-  'Maternity Leave', 'Paternity Leave', 'Parental Leave',
-  'Unpaid Leave', 'Personal Leave', 'Other',
-];
 
 export default function Calendar() {
   const today = useMemo(() => startOfDay(new Date()), []);

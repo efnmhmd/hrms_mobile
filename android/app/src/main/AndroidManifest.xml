@@ -7,6 +7,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/AppTheme">
 
         <activity
@@ -38,4 +39,17 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Saving a downloaded document into the shared Documents folder. Android 11+
+      (API 30) grants this implicitly under scoped storage and ignores both the
+      permissions and requestLegacyExternalStorage above, so they are capped at
+      API 29, where the write still goes through the legacy File API.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
 </manifest>

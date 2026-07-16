@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../../utils/api';
 import { getUser } from '../../utils/auth';
 import { getErrorMessage } from '../../utils/errorHandler';
+import { LEAVE_TYPES } from '../../utils/leaveTypes';
 
 // Employee's own annual-leave balance.
 //   GET /leave/balances/current/:userId
@@ -365,12 +366,6 @@ function fmt(n) {
 }
 
 // Leave types offered in the request sheet — mirrors the Calendar request form.
-const LEAVE_TYPES = [
-  'Annual Leave', 'Sick Leave', 'Bank Holiday', 'Compassionate Leave',
-  'Maternity Leave', 'Paternity Leave', 'Parental Leave',
-  'Unpaid Leave', 'Personal Leave', 'Other',
-];
-
 function toYMD(d) {
   const dt = d instanceof Date ? d : new Date(d);
   const y = dt.getFullYear();
