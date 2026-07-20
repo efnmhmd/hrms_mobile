@@ -131,7 +131,7 @@ const styles = `
   .sm-card.is-warn { border-left-color: #c49c4a; }
   .sm-avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 0.74rem; font-weight: 700; background: linear-gradient(135deg, rgba(132, 169, 140, 0.28), rgba(82, 121, 111, 0.18)); color: #354f52; }
   .sm-body { min-width: 0; flex: 1; }
-  .sm-name { font-size: 0.85rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sm-name { display: block; font-size: 0.85rem; font-weight: 600; color: #2f3e46; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sm-meta { margin-top: 2px; display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: #52796f; }
   .sm-meta .sm-time { font-weight: 600; color: #2f3e46; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .sm-meta .sm-loc { color: #7a8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

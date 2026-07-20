@@ -1174,6 +1174,7 @@ export default function Calendar() {
             actingId={actingId}
             onCancel={cancelLeave}
             onOpenForm={openModal}
+            canCancelApproved={canApprove}
           />
         ) : tab === 'pending' ? (
           <PendingList
@@ -1190,6 +1191,7 @@ export default function Calendar() {
             actingId={actingId}
             onCancel={cancelLeave}
             onOpenForm={openModal}
+            canCancelApproved={canApprove}
           />
         )}
 
@@ -1237,7 +1239,7 @@ function RequestCardSkeleton() {
   );
 }
 
-function ApprovedList({ items, loading, actingId, onCancel, onOpenForm }) {
+function ApprovedList({ items, loading, actingId, onCancel, onOpenForm, canCancelApproved }) {
   if (loading && items.length === 0) {
     return (
       <>
@@ -1305,27 +1307,29 @@ function ApprovedList({ items, loading, actingId, onCancel, onOpenForm }) {
             {req.reason}
           </div>
         )}
-        {leaveStarted(req) ? (
-          <div className="cal-req-note">This leave has started and can no longer be cancelled.</div>
-        ) : (
-          <div className="cal-req-actions">
-            <button
-              type="button"
-              className="cal-req-btn is-cancel"
-              onClick={() => onCancel(req)}
-              disabled={actingId === req._id}
-            >
-              {actingId === req._id ? <span className="cal-mini-spin" /> : null}
-              Cancel Leave
-            </button>
-          </div>
+        {canCancelApproved && (
+          leaveStarted(req) ? (
+            <div className="cal-req-note">This leave has started and can no longer be cancelled.</div>
+          ) : (
+            <div className="cal-req-actions">
+              <button
+                type="button"
+                className="cal-req-btn is-cancel"
+                onClick={() => onCancel(req)}
+                disabled={actingId === req._id}
+              >
+                {actingId === req._id ? <span className="cal-mini-spin" /> : null}
+                Cancel Leave
+              </button>
+            </div>
+          )
         )}
       </div>
     );
   });
 }
 
-function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm }) {
+function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm, canCancelApproved }) {
   if (loading && items.length === 0) {
     return (
       <>
@@ -1354,7 +1358,11 @@ function MyRequestsList({ items, loading, actingId, onCancel, onOpenForm }) {
       : status === 'rejected' ? 'Rejected'
       : status === 'cancelled' ? 'Cancelled'
       : 'Pending';
-    const cancellable = (status === 'pending' || status === 'approved') && !leaveStarted(req);
+    // Employees may cancel a request only while it is still pending. Once a
+    // manager approves it, the cancel option disappears; managers/admins keep
+    // the ability to cancel leave they approved.
+    const cancellable = (status === 'pending' || (status === 'approved' && canCancelApproved))
+      && !leaveStarted(req);
     return (
       <div key={req._id} className="cal-req-card cal-anim">
         <div className="cal-req-top">
