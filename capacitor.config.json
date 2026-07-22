@@ -1,6 +1,6 @@
 {
   "appId": "uk.co.talentshield.hrms",
-  "appName": "HRMS",
+  "appName": "TalentShield",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
